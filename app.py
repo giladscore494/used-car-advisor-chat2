@@ -2,6 +2,7 @@ import os
 import re
 import json
 import requests
+import datetime
 import streamlit as st
 import pandas as pd
 from openai import OpenAI
@@ -42,7 +43,6 @@ def parse_gemini_json(answer):
     if cleaned.startswith("```"):
         cleaned = re.sub(r"```[a-zA-Z]*", "", cleaned)
         cleaned = cleaned.replace("```", "").strip()
-
     try:
         data = json.loads(cleaned)
         if isinstance(data, list):
@@ -126,6 +126,26 @@ def final_recommendation_with_gpt(answers, models_data):
     return response.choices[0].message.content
 
 # =============================
+# פונקציית לוג – שמירת כל שאלון
+# =============================
+def save_log(answers, df, summary, filename="car_advisor_logs.csv"):
+    record = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "answers": json.dumps(answers, ensure_ascii=False),
+        "summary": summary,
+        "models_data": df.to_json(force_ascii=False)
+    }
+
+    if os.path.exists(filename):
+        existing = pd.read_csv(filename)
+        new_df = pd.DataFrame([record])
+        final = pd.concat([existing, new_df], ignore_index=True)
+    else:
+        final = pd.DataFrame([record])
+
+    final.to_csv(filename, index=False, encoding="utf-8-sig")
+
+# =============================
 # Streamlit UI
 # =============================
 st.set_page_config(page_title="Car-Advisor", page_icon="🚗")
@@ -193,6 +213,12 @@ if submitted:
         summary = final_recommendation_with_gpt(answers, models_data)
         st.session_state["summary"] = summary
 
+    # ✅ שמירת לוג
+    try:
+        save_log(answers, st.session_state["df"], st.session_state["summary"])
+    except Exception as e:
+        st.warning(f"בעיה בשמירת הלוג: {e}")
+
 # =============================
 # הצגת תוצאות אם קיימות ב-Session
 # =============================
@@ -252,6 +278,15 @@ if "summary" in st.session_state:
     with col2:
         st.markdown("🚗 רצוי לקחת את הרכב לבדיקה במכון בדיקה מורשה לפני רכישה.")
 
+# =============================
+# כפתור הורדה של כל היסטוריית השאלונים
+# =============================
+log_file = "car_advisor_logs.csv"
+if os.path.exists(log_file):
+    with open(log_file, "rb") as f:
+        st.download_button(
+            "⬇️ הורד את כל היסטוריית השאלונים",
+            f,
+            file_name="car_advisor_logs.csv",
+            mime="text/csv"
         )
-    with col2:
-        st.markdown("🚗 רצוי לקחת את הרכב לבדיקה במכון בדיקה מורשה לפני רכישה.")
