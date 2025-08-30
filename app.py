@@ -6,6 +6,7 @@ import datetime
 import streamlit as st
 import pandas as pd
 from openai import OpenAI
+from rapidfuzz import process, fuzz
 
 # =============================
 # מפתחות API
@@ -49,6 +50,35 @@ def parse_gemini_json(answer):
         return {"error": str(e), "raw": cleaned}
 
 # =============================
+# פונקציות לנרמול + Fuzzy Matching
+# =============================
+def normalize_name(name: str) -> str:
+    name = str(name).strip()
+    name = name.replace(" / ", " ").replace("/", " ")
+    name = name.replace("'", "").replace('"', "")
+    name = name.replace("גרנד קופה", "מגאן")
+    return name
+
+def filter_models_by_mot(models_list, mot_file="car_models_israel.csv", score_cutoff=80):
+    try:
+        mot_df = pd.read_csv(mot_file)
+        mot_df["full_name"] = mot_df["brand"].astype(str).str.strip() + " " + mot_df["model"].astype(str).str.strip()
+        mot_models = [normalize_name(m) for m in mot_df["full_name"].dropna().unique().tolist()]
+
+        verified = []
+        for gm_model in models_list:
+            gm_model_norm = normalize_name(gm_model)
+            match, score, _ = process.extractOne(
+                gm_model_norm, mot_models, scorer=fuzz.token_sort_ratio
+            )
+            if match and score >= score_cutoff:
+                verified.append(match)
+
+        return list(set(verified))
+    except Exception as e:
+        return []
+
+# =============================
 # שלב 1 – Gemini מחזיר רשימת דגמים
 # =============================
 def fetch_models_list_with_gemini(answers):
@@ -61,7 +91,7 @@ def fetch_models_list_with_gemini(answers):
                 {answers}
 
                 החזר רשימה של לפחות 10 דגמים שנמכרים בישראל
-                אך ורק אם הם עומדים בקריטריונים:
+                שעומדים בקריטריונים:
                 - מחיר {answers['budget_min']}–{answers['budget_max']} ₪
                 - שנות ייצור {answers['year_range']}
                 - סוג רכב {answers['car_type']}
@@ -78,25 +108,7 @@ def fetch_models_list_with_gemini(answers):
     return parse_gemini_json(answer)
 
 # =============================
-# שלב 2 – אימות מול משרד התחבורה
-# =============================
-def filter_models_by_mot(models_list, mot_file="car_models_israel.csv"):
-    try:
-        mot_df = pd.read_csv(mot_file)
-
-        # יצירת עמודה מלאה: מותג + דגם
-        mot_df["full_name"] = mot_df["brand"].astype(str).str.strip() + " " + mot_df["model"].astype(str).str.strip()
-        mot_models = mot_df["full_name"].dropna().unique().tolist()
-
-        # סינון רשימת Gemini מול המלאים
-        verified = [m for m in models_list if m in mot_models]
-
-        return verified
-    except Exception as e:
-        return []
-
-# =============================
-# שלב 3 – Gemini מחזיר טבלה עם 10 פרמטרים
+# שלב 2 – Gemini מחזיר טבלה עם 10 פרמטרים
 # =============================
 def fetch_models_data_with_gemini(verified_models):
     payload = {
@@ -131,7 +143,7 @@ def fetch_models_data_with_gemini(verified_models):
     return parse_gemini_json(answer)
 
 # =============================
-# שלב 4 – GPT מסכם ומדרג
+# שלב 3 – GPT מסכם ומדרג
 # =============================
 def final_recommendation_with_gpt(answers, models_data):
     text = f"""
@@ -244,12 +256,70 @@ if submitted:
 # הצגת תוצאות
 # =============================
 if "df" in st.session_state:
-    st.subheader("📊 השוואת נתונים בין הדגמים")
-    st.dataframe(st.session_state["df"], use_container_width=True)
+    df = st.session_state["df"]
 
-    csv = st.session_state["df"].to_csv(index=True, encoding="utf-8-sig")
+    def highlight_numeric(val, low_good=True):
+        try:
+            num = float(str(val).replace("₪", "").replace("%", "").replace(",", "").strip().split()[0])
+        except:
+            return ""
+        if low_good:
+            if num <= 3000:
+                return "background-color: #d4efdf"
+            elif num >= 7000:
+                return "background-color: #f5b7b1"
+        else:
+            if num >= 16:
+                return "background-color: #d4efdf"
+            elif num <= 10:
+                return "background-color: #f5b7b1"
+        return ""
+
+    subsets = {
+        "low_good": ["ביטוח חובה+צד ג' (דיסקליימר)", "תחזוקה שנתית", "ירידת ערך"],
+        "high_good": ["צריכת דלק"]
+    }
+
+    styled_df = df.style
+    for col in subsets["low_good"]:
+        if col in df.columns:
+            styled_df = styled_df.applymap(lambda v: highlight_numeric(v, low_good=True), subset=[col])
+    for col in subsets["high_good"]:
+        if col in df.columns:
+            styled_df = styled_df.applymap(lambda v: highlight_numeric(v, low_good=False), subset=[col])
+
+    st.subheader("📊 השוואת נתונים בין הדגמים")
+    st.dataframe(styled_df, use_container_width=True)
+
+    csv = df.to_csv(index=True, encoding="utf-8-sig")
     st.download_button("⬇️ הורד כ-CSV", csv, "car_advisor.csv", "text/csv")
 
 if "summary" in st.session_state:
     st.subheader("🔎 ההמלצה הסופית שלך")
     st.write(st.session_state["summary"])
+
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(
+            f'<a href="https://infocar.co.il/" target="_blank">'
+            f'<button style="background-color:#117A65;color:white;padding:10px 20px;'
+            f'border:none;border-radius:8px;font-size:16px;cursor:pointer;">'
+            f'🔗 בדוק עבר ביטוחי ב-InfoCar</button></a>',
+            unsafe_allow_html=True
+        )
+    with col2:
+        st.markdown("🚗 רצוי לקחת את הרכב לבדיקה במכון בדיקה מורשה לפני רכישה.")
+
+# =============================
+# כפתור הורדה של כל היסטוריית השאלונים
+# =============================
+log_file = "car_advisor_logs.csv"
+if os.path.exists(log_file):
+    with open(log_file, "rb") as f:
+        st.download_button(
+            "⬇️ הורד את כל היסטוריית השאלונים",
+            f,
+            file_name="car_advisor_logs.csv",
+            mime="text/csv"
+        )
