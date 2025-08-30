@@ -35,9 +35,9 @@ def safe_gemini_call(payload, model="gemini-2.0-flash"):
         return f"שגיאה: {e}"
 
 # =============================
-# שלב 1 – Gemini מייצר רשימת דגמים מתאימים
+# שלב 1 – Gemini מחזיר טבלה מלאה
 # =============================
-def generate_car_candidates_with_gemini(answers):
+def fetch_models_data_with_gemini(answers):
     payload = {
         "contents": [{
             "role": "user",
@@ -46,54 +46,35 @@ def generate_car_candidates_with_gemini(answers):
                 המשתמש נתן את ההעדפות הבאות:
                 {answers}
 
-                החזר רשימה של עד 7 דגמים מתאימים לרכישה בישראל בטווח התקציב {answers['budget_min']}–{answers['budget_max']} ₪.
+                החזר אך ורק רכבים שמחירם ביד שנייה נופל בטווח התקציב {answers['budget_min']}–{answers['budget_max']} ₪.
+                אם אין התאמה – אל תחזיר את הדגם כלל.
 
-                החזר JSON בלבד, לדוגמה:
-                ["Toyota Corolla 2018", "Hyundai i30 2019", "Mazda 3 2017"]
-                """
-            }]
-        }]
-    }
-    answer = safe_gemini_call(payload)
-    try:
-        return json.loads(answer)
-    except Exception as e:
-        return {"error": str(e), "raw": answer}
-
-# =============================
-# שלב 2 – Gemini מחפש מידע יבש לכל דגם
-# =============================
-def fetch_models_data_with_gemini(models_list):
-    payload = {
-        "contents": [{
-            "role": "user",
-            "parts": [{
-                "text": f"""
-                מצא מידע יבש ברשת על הדגמים הבאים:
-                {models_list}
-
-                עבור כל דגם החזר בפורמט JSON:
+                עבור כל דגם החזר JSON תקני בלבד (במרכאות כפולות) עם השדות:
                 {{
                   "Model Name": {{
-                     "price_range": "טווח מחירון ממוצע ביד שנייה",
+                     "price_range": "טווח מחירון אמיתי ביד שנייה (₪, רק בתוך הטווח)",
                      "availability": "זמינות בישראל",
-                     "insurance": "עלות ביטוח ממוצעת",
-                     "license_fee": "אגרת רישוי/טסט שנתית",
-                     "maintenance": "תחזוקה שנתית ממוצעת",
+                     "insurance": "עלות ביטוח חובה + צד ג' ממוצעת (₪ לשנה, אמין)",
+                     "license_fee": "אגרת רישוי/טסט שנתית (₪, לפי נפח מנוע)",
+                     "maintenance": "תחזוקה שנתית ממוצעת (₪)",
                      "common_issues": "תקלות נפוצות",
-                     "fuel_consumption": "צריכת דלק אמיתית",
-                     "depreciation": "ירידת ערך ממוצעת",
-                     "safety": "דירוג בטיחות",
+                     "fuel_consumption": "צריכת דלק אמיתית (ק״מ לליטר)",
+                     "depreciation": "ירידת ערך ממוצעת (%)",
+                     "safety": "דירוג בטיחות (כוכבים)",
                      "parts_availability": "זמינות חלפים בישראל"
                   }}
                 }}
 
-                אל תוסיף טקסט מעבר ל-JSON.
+                חובה:
+                - אל תחרוג מהתקציב הנתון.
+                - אל תמציא מספרים. אם מידע לא קיים – כתוב "לא נמצא".
+                - אל תוסיף טקסט מעבר ל-JSON.
                 """
             }]
         }]
     }
     answer = safe_gemini_call(payload)
+
     try:
         match = re.search(r"\{.*\}", answer, re.S)
         if match:
@@ -104,7 +85,7 @@ def fetch_models_data_with_gemini(models_list):
         return {"error": str(e), "raw": answer}
 
 # =============================
-# שלב 3 – GPT מסנן ומסכם
+# שלב 2 – GPT מסכם ומדרג
 # =============================
 def final_recommendation_with_gpt(answers, models_data):
     text = f"""
@@ -114,11 +95,11 @@ def final_recommendation_with_gpt(answers, models_data):
     נתוני הדגמים:
     {models_data}
 
-    צור המלצה בעברית:
-    - בחר עד 5 דגמים מובילים
-    - הצג טבלה עם כל הפרמטרים (מחירון, ביטוח, רישוי, תחזוקה, תקלות, דלק, ירידת ערך, בטיחות, חלפים)
-    - הסבר יתרונות וחסרונות של כל דגם
-    - נתח התאמה אישית לפי התקציב, מנוע, שנות ייצור, נוחות, חסכוניות
+    צור סיכום בעברית:
+    - בחר את 5 הדגמים הטובים ביותר בלבד
+    - הסבר יתרונות וחסרונות של כל אחד
+    - התייחס במיוחד לעלות ביטוח, תחזוקה, ירידת ערך וצריכת דלק
+    - הצג את הסיבות למה הם הכי מתאימים לתקציב ולצרכים של המשתמש
     """
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -164,19 +145,39 @@ with st.form("car_form"):
     submitted = st.form_submit_button("שלח וקבל המלצה")
 
 if submitted:
-    with st.spinner("🤖 Gemini מחפש דגמים מתאימים..."):
-        models_list = generate_car_candidates_with_gemini(answers)
-
-    with st.spinner("🌐 Gemini בודק מידע יבש על הדגמים..."):
-        models_data = fetch_models_data_with_gemini(models_list)
+    with st.spinner("🌐 Gemini מחפש רכבים מתאימים..."):
+        models_data = fetch_models_data_with_gemini(answers)
 
     try:
         df = pd.DataFrame(models_data).T
         df.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
-        st.subheader("📊 השוואת נתונים בין הדגמים")
-        st.dataframe(df, use_container_width=True)
 
-        # כפתור הורדה ל-CSV
+        # =============================
+        # טבלה צבעונית
+        # =============================
+        def highlight_numeric(val, low_good=True):
+            try:
+                num = float(str(val).replace("₪", "").replace("%", "").replace(",", "").strip())
+            except:
+                return ""
+            if low_good:  # ערך נמוך טוב
+                if num <= 3000:
+                    return "background-color: #d4efdf"  # ירוק בהיר
+                elif num >= 7000:
+                    return "background-color: #f5b7b1"  # אדום בהיר
+            else:  # ערך גבוה טוב (למשל ק״מ לליטר)
+                if num >= 16:
+                    return "background-color: #d4efdf"
+                elif num <= 10:
+                    return "background-color: #f5b7b1"
+            return ""
+
+        styled_df = df.style.applymap(lambda v: highlight_numeric(v, low_good=True), subset=["עלות ביטוח", "תחזוקה שנתית"])\
+                            .applymap(lambda v: highlight_numeric(v, low_good=False), subset=["צריכת דלק"])
+
+        st.subheader("📊 השוואת נתונים בין הדגמים")
+        st.dataframe(styled_df, use_container_width=True)
+
         csv = df.to_csv(index=True, encoding="utf-8-sig")
         st.download_button("⬇️ הורד כ-CSV", csv, "car_advisor.csv", "text/csv")
 
@@ -184,13 +185,12 @@ if submitted:
         st.warning("⚠️ בעיה בנתוני JSON")
         st.write(models_data)
 
-    with st.spinner("⚡ GPT מסנן ומסכם..."):
+    with st.spinner("⚡ GPT מסכם ומדרג..."):
         summary = final_recommendation_with_gpt(answers, models_data)
 
     st.subheader("🔎 ההמלצה הסופית שלך")
     st.write(summary)
 
-    # הערות חשובות
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
