@@ -6,7 +6,7 @@ import datetime
 import streamlit as st
 import pandas as pd
 import unidecode
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 from openai import OpenAI
 
 # =============================
@@ -20,7 +20,15 @@ if not OPENAI_API_KEY or not GEMINI_API_KEY:
     st.stop()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-translator = Translator()
+
+# =============================
+# תרגום אוטומטי לעברית
+# =============================
+def translate_to_hebrew(name: str) -> str:
+    try:
+        return GoogleTranslator(source="en", target="iw").translate(name)
+    except:
+        return name
 
 # =============================
 # קריאה בטוחה ל-Gemini
@@ -50,15 +58,6 @@ def parse_gemini_json(answer):
         return json.loads(cleaned)
     except Exception as e:
         return {"error": str(e), "raw": cleaned}
-
-# =============================
-# תרגום לאוטומטית לעברית
-# =============================
-def translate_to_hebrew(name: str) -> str:
-    try:
-        return translator.translate(name, src="en", dest="iw").text
-    except:
-        return name
 
 # =============================
 # ניקוי שם
