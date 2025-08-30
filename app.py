@@ -102,7 +102,8 @@ def filter_models_by_registry(candidate_models, answers, df_cars):
         model_name_he = translate_to_hebrew(model_name)
         norm = normalize_name(model_name_he)
 
-        exists = df_cars[df_cars["model_norm"].str.contains(norm, na=False)]
+        # שימוש ב- regex=False כדי למנוע קריסות
+        exists = df_cars[df_cars["model_norm"].str.contains(norm, na=False, regex=False)]
         if exists.empty:
             continue
 
