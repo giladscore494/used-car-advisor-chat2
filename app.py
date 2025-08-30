@@ -1,4 +1,3 @@
-
 import os
 import re
 import json
@@ -7,6 +6,7 @@ import datetime
 import streamlit as st
 import pandas as pd
 import unidecode
+from googletrans import Translator
 from openai import OpenAI
 
 # =============================
@@ -20,6 +20,7 @@ if not OPENAI_API_KEY or not GEMINI_API_KEY:
     st.stop()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
+translator = Translator()
 
 # =============================
 # קריאה בטוחה ל-Gemini
@@ -51,6 +52,21 @@ def parse_gemini_json(answer):
         return {"error": str(e), "raw": cleaned}
 
 # =============================
+# תרגום לאוטומטית לעברית
+# =============================
+def translate_to_hebrew(name: str) -> str:
+    try:
+        return translator.translate(name, src="en", dest="iw").text
+    except:
+        return name
+
+# =============================
+# ניקוי שם
+# =============================
+def normalize_name(name: str) -> str:
+    return unidecode.unidecode(str(name)).lower().replace(" ", "").replace("-", "")
+
+# =============================
 # שלב 1 – Gemini מציע רשימת דגמים
 # =============================
 def fetch_candidate_models(answers):
@@ -62,8 +78,10 @@ def fetch_candidate_models(answers):
                 המשתמש נתן את ההעדפות הבאות:
                 {answers}
 
-                החזר רשימה של לפחות 10 דגמים מתאימים
-                בפורמט JSON פשוט:
+                החזר רשימה של לפחות 10 דגמים מתאימים,
+                כולל התחשבות בדרישה לגבי טורבו אם צוינה.
+
+                הפלט חייב להיות בפורמט JSON פשוט:
                 ["Model1", "Model2", "Model3", ...]
                 אל תוסיף טקסט נוסף מעבר ל-JSON.
                 """
@@ -76,15 +94,15 @@ def fetch_candidate_models(answers):
 # =============================
 # שלב 2 – סינון מול משרד התחבורה
 # =============================
-def normalize_name(name: str) -> str:
-    return unidecode.unidecode(str(name)).lower().replace(" ", "").replace("-", "")
-
 def filter_models_by_registry(candidate_models, answers, df_cars):
     valid_models = []
     df_cars["model_norm"] = df_cars["model"].astype(str).apply(normalize_name)
 
     for model_name in candidate_models:
-        norm = normalize_name(model_name)
+        # תרגום לעברית
+        model_name_he = translate_to_hebrew(model_name)
+        norm = normalize_name(model_name_he)
+
         exists = df_cars[df_cars["model_norm"].str.contains(norm, na=False)]
         if exists.empty:
             continue
@@ -100,6 +118,14 @@ def filter_models_by_registry(candidate_models, answers, df_cars):
             if not any(answers["engine"] in f for f in fuels):
                 continue
 
+        # טורבו
+        if answers.get("turbo") == "כן":
+            if "TURBO" not in model_name.upper():
+                continue
+        elif answers.get("turbo") == "לא":
+            if "TURBO" in model_name.upper():
+                continue
+
         # שנת ייצור
         if answers.get("year_range"):
             year_range = answers["year_range"].replace("+", "").split("–")
@@ -108,7 +134,7 @@ def filter_models_by_registry(candidate_models, answers, df_cars):
             if not any((years >= year_min) & (years <= year_max)):
                 continue
 
-        valid_models.append(model_name)
+        valid_models.append(model_name_he)
 
     return valid_models
 
@@ -229,6 +255,7 @@ with st.form("car_form"):
     answers["year_range"] = st.selectbox("שנות ייצור:", ["2010–2015", "2016–2020", "2021+"])
     answers["car_type"] = st.selectbox("סוג רכב:", ["סדאן", "האצ'בק", "SUV", "טנדר", "משפחתי"])
     answers["gearbox"] = st.radio("גיר:", ["לא משנה", "אוטומט", "ידני"])
+    answers["turbo"] = st.radio("מנוע טורבו:", ["לא משנה", "כן", "לא"])
     answers["usage"] = st.radio("שימוש עיקרי:", ["עירוני", "בין-עירוני", "מעורב"])
     answers["size"] = st.selectbox("גודל רכב:", ["קטן", "משפחתי", "SUV", "טנדר"])
     answers["driver_age"] = st.selectbox("גיל הנהג הראשי:", ["18–20", "21–24", "25–30", "31–40", "40+"])
@@ -282,3 +309,8 @@ if st.session_state["results_df"] is not None:
 if st.session_state["summary_text"] is not None:
     st.subheader("🔎 ההמלצה הסופית שלך")
     st.write(st.session_state["summary_text"])
+
+    # הערות קבועות
+    st.markdown("---")
+    st.markdown("🔗 בדוק עבר ביטוחי במרכז הסליקה")
+    st.markdown("🚗 רצוי לקחת את הרכב לבדיקה במכון בדיקה מורשה")
