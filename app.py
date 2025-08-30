@@ -60,10 +60,14 @@ def parse_gemini_json(answer):
         return {"error": str(e), "raw": cleaned}
 
 # =============================
-# ניקוי שם
+# ניקוי שם (עברית ≠ אנגלית)
 # =============================
 def normalize_name(name: str) -> str:
-    return unidecode.unidecode(str(name)).lower().replace(" ", "").replace("-", "")
+    text = str(name)
+    if re.search(r'[a-zA-Z]', text):  # אנגלית
+        return unidecode.unidecode(text).lower().replace(" ", "").replace("-", "")
+    # עברית
+    return re.sub(r"[\s\-]", "", text).lower()
 
 # =============================
 # שלב 1 – Gemini מציע רשימת דגמים
@@ -93,17 +97,25 @@ def fetch_candidate_models(answers):
 # =============================
 # שלב 2 – סינון מול משרד התחבורה
 # =============================
-def filter_models_by_registry(candidate_models, answers, df_cars):
+def filter_models_by_registry(candidate_models, answers, df_cars, debug=False):
     valid_models = []
     df_cars["model_norm"] = df_cars["model"].astype(str).apply(normalize_name)
 
+    debug_rows = []
+
     for model_name in candidate_models:
-        # תרגום לעברית
         model_name_he = translate_to_hebrew(model_name)
         norm = normalize_name(model_name_he)
 
-        # שימוש ב- regex=False כדי למנוע קריסות
         exists = df_cars[df_cars["model_norm"].str.contains(norm, na=False, regex=False)]
+
+        debug_rows.append({
+            "original": model_name,
+            "hebrew": model_name_he,
+            "normalized": norm,
+            "matches_in_registry": len(exists)
+        })
+
         if exists.empty:
             continue
 
@@ -135,6 +147,10 @@ def filter_models_by_registry(candidate_models, answers, df_cars):
                 continue
 
         valid_models.append(model_name_he)
+
+    if debug:
+        st.markdown("### 🔍 Debug – שלבי סינון")
+        st.dataframe(pd.DataFrame(debug_rows))
 
     return valid_models
 
@@ -268,6 +284,7 @@ with st.form("car_form"):
     answers["eco"] = st.radio("שיקולי איכות סביבה:", ["לא משנה", "חשוב מאוד"])
     answers["resale_value"] = st.radio("שמירת ערך עתידית:", ["חשוב", "פחות חשוב"])
     answers["extra"] = st.text_area("משהו נוסף?")
+    debug_mode = st.checkbox("הצג Debug Mode (לראות שלבי סינון)")
 
     submitted = st.form_submit_button("שלח וקבל המלצה")
 
@@ -278,7 +295,7 @@ if submitted:
     st.write(candidate_models)
 
     with st.spinner("🧹 סינון מול משרד התחבורה..."):
-        valid_models = filter_models_by_registry(candidate_models, answers, df_cars)
+        valid_models = filter_models_by_registry(candidate_models, answers, df_cars, debug=debug_mode)
     st.markdown("### ✅ דגמים אחרי סינון משרד התחבורה")
     st.write(valid_models)
 
