@@ -1,3 +1,4 @@
+
 import os
 import re
 import json
@@ -5,6 +6,7 @@ import requests
 import datetime
 import streamlit as st
 import pandas as pd
+import unidecode
 from openai import OpenAI
 
 # =============================
@@ -44,8 +46,7 @@ def parse_gemini_json(answer):
         cleaned = re.sub(r"```[a-zA-Z]*", "", cleaned)
         cleaned = cleaned.replace("```", "").strip()
     try:
-        data = json.loads(cleaned)
-        return data
+        return json.loads(cleaned)
     except Exception as e:
         return {"error": str(e), "raw": cleaned}
 
@@ -75,10 +76,16 @@ def fetch_candidate_models(answers):
 # =============================
 # שלב 2 – סינון מול משרד התחבורה
 # =============================
+def normalize_name(name: str) -> str:
+    return unidecode.unidecode(str(name)).lower().replace(" ", "").replace("-", "")
+
 def filter_models_by_registry(candidate_models, answers, df_cars):
     valid_models = []
+    df_cars["model_norm"] = df_cars["model"].astype(str).apply(normalize_name)
+
     for model_name in candidate_models:
-        exists = df_cars[df_cars["model"].str.contains(model_name, case=False, na=False)]
+        norm = normalize_name(model_name)
+        exists = df_cars[df_cars["model_norm"].str.contains(norm, na=False)]
         if exists.empty:
             continue
 
@@ -207,6 +214,12 @@ COLUMN_TRANSLATIONS = {
 # טען מאגר משרד התחבורה
 df_cars = pd.read_csv("car_models_israel.csv")
 
+# Session state
+if "results_df" not in st.session_state:
+    st.session_state["results_df"] = None
+if "summary_text" not in st.session_state:
+    st.session_state["summary_text"] = None
+
 with st.form("car_form"):
     answers = {}
     answers["budget_min"] = int(st.text_input("תקציב מינימלי (₪)", "20000"))
@@ -234,9 +247,13 @@ with st.form("car_form"):
 if submitted:
     with st.spinner("🌐 Gemini מחפש דגמים מתאימים..."):
         candidate_models = fetch_candidate_models(answers)
+    st.markdown("### 📝 דגמים ש-Gemini הציע")
+    st.write(candidate_models)
 
     with st.spinner("🧹 סינון מול משרד התחבורה..."):
         valid_models = filter_models_by_registry(candidate_models, answers, df_cars)
+    st.markdown("### ✅ דגמים אחרי סינון משרד התחבורה")
+    st.write(valid_models)
 
     with st.spinner("📊 Gemini מחזיר נתונים יבשים..."):
         models_data = fetch_models_data_with_gemini(valid_models, answers)
@@ -244,19 +261,24 @@ if submitted:
     try:
         df = pd.DataFrame(models_data).T
         df.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
-        st.subheader("📊 השוואת נתונים בין הדגמים")
-        st.dataframe(df, use_container_width=True)
-        csv = df.to_csv(index=True, encoding="utf-8-sig")
-        st.download_button("⬇️ הורד כ-CSV", csv, "car_advisor.csv", "text/csv")
+        st.session_state["results_df"] = df
     except Exception as e:
         st.warning("⚠️ בעיה בנתוני JSON")
         st.write(models_data)
 
     with st.spinner("⚡ GPT מסכם ומדרג..."):
         summary = final_recommendation_with_gpt(answers, models_data)
+        st.session_state["summary_text"] = summary
 
-    st.subheader("🔎 ההמלצה הסופית שלך")
-    st.write(summary)
-
-    # שמירת לוג
     save_log(answers, models_data, summary)
+
+# הצגת תוצאות מה-Session State
+if st.session_state["results_df"] is not None:
+    st.subheader("📊 השוואת נתונים בין הדגמים")
+    st.dataframe(st.session_state["results_df"], use_container_width=True)
+    csv = st.session_state["results_df"].to_csv(index=True, encoding="utf-8-sig")
+    st.download_button("⬇️ הורד כ-CSV", csv, "car_advisor.csv", "text/csv")
+
+if st.session_state["summary_text"] is not None:
+    st.subheader("🔎 ההמלצה הסופית שלך")
+    st.write(st.session_state["summary_text"])
