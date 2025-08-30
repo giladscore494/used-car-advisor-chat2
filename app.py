@@ -39,14 +39,12 @@ def safe_gemini_call(payload, model="gemini-2.0-flash"):
 # =============================
 def parse_gemini_json(answer):
     cleaned = answer.strip()
-    # ננקה סימוני Markdown
     if cleaned.startswith("```"):
         cleaned = re.sub(r"```[a-zA-Z]*", "", cleaned)
         cleaned = cleaned.replace("```", "").strip()
 
     try:
         data = json.loads(cleaned)
-        # אם זה מערך → נהפוך ל־dict מאוחד
         if isinstance(data, list):
             merged = {}
             for obj in data:
@@ -74,12 +72,12 @@ def fetch_models_data_with_gemini(answers):
                 אם יש יותר מ-10 אפשריים – בחר את ה-10 הטובים ביותר לפי ניתוח של אמינות, עלות ביטוח, תחזוקה, ירידת ערך ובטיחות.
                 אם יש פחות מ-10 – החזר את כולם.
 
-                עבור כל דגם החזר JSON תקני בלבד (במרכאות כפולות) עם השדות:
+                עבור כל דגם החזר JSON תקני בלבד עם השדות:
                 {{
                   "Model Name": {{
                      "price_range": "טווח מחירון אמיתי ביד שנייה (₪, לדוגמה 6,000–8,000)",
                      "availability": "זמינות בישראל",
-                     "insurance": "עלות ביטוח חובה + צד ג' ממוצעת (₪ לשנה, אמין)",
+                     "insurance_total": "עלות ביטוח חובה + צד ג' ממוצעת (₪ לשנה, עם דיסקליימר שהמחיר משתנה לפי גיל, ותק ועבר ביטוחי)",
                      "license_fee": "אגרת רישוי/טסט שנתית (₪, לפי נפח מנוע)",
                      "maintenance": "תחזוקה שנתית ממוצעת (₪)",
                      "common_issues": "תקלות נפוצות",
@@ -136,7 +134,7 @@ st.title("🚗 Car-Advisor – יועץ רכבים חכם")
 COLUMN_TRANSLATIONS = {
     "price_range": "טווח מחירון",
     "availability": "זמינות בישראל",
-    "insurance": "עלות ביטוח",
+    "insurance_total": "ביטוח חובה+צד ג' (דיסקליימר)",
     "license_fee": "אגרת רישוי",
     "maintenance": "תחזוקה שנתית",
     "common_issues": "תקלות נפוצות",
@@ -148,6 +146,7 @@ COLUMN_TRANSLATIONS = {
 
 with st.form("car_form"):
     answers = {}
+    # שאלות קיימות
     answers["budget_range"] = st.selectbox("טווח תקציב:", ["5–10K", "10–20K", "20–40K", "40K+"])
     answers["budget_min"] = int(st.text_input("תקציב מינימלי (₪)", "10000"))
     answers["budget_max"] = int(st.text_input("תקציב מקסימלי (₪)", "20000"))
@@ -159,6 +158,18 @@ with st.form("car_form"):
     answers["gearbox"] = st.radio("גיר:", ["לא משנה", "אוטומט", "ידני", "רובוטי"])
     answers["usage"] = st.radio("שימוש עיקרי:", ["עירוני", "בין-עירוני", "מעורב"])
     answers["size"] = st.selectbox("גודל רכב:", ["קטן", "משפחתי", "SUV", "טנדר"])
+    
+    # שאלות קריטיות חדשות
+    answers["driver_age"] = st.selectbox("גיל הנהג הראשי:", ["עד 21", "21–24", "25–34", "35+"])
+    answers["license_years"] = st.selectbox("ותק רישיון נהיגה:", ["פחות משנה", "1–3 שנים", "3–5 שנים", "מעל 5 שנים"])
+    answers["insurance_history"] = st.selectbox("עבר ביטוחי/תעבורתי:", ["ללא תביעות/תאונות/דוחות", "תאונה אחת/דוח", "מספר תביעות/שלילה"])
+    answers["annual_km"] = st.selectbox("נסועה שנתית (ק״מ):", ["עד 10,000", "10,000–20,000", "20,000–30,000", "מעל 30,000"])
+    answers["passengers"] = st.selectbox("מספר נוסעים עיקרי:", ["לרוב לבד", "2 אנשים", "3–5 נוסעים", "מעל 5"])
+    answers["maintenance_budget"] = st.selectbox("יכולת השקעה בתחזוקה שנתית:", ["מתחת 3,000 ₪", "3,000–5,000 ₪", "מעל 5,000 ₪"])
+    answers["reliability_vs_comfort"] = st.selectbox("מה חשוב יותר?", ["אמינות מעל הכול", "איזון אמינות ונוחות", "נוחות/ביצועים גם במחיר תחזוקה"])
+    answers["eco_pref"] = st.selectbox("שיקולי איכות סביבה:", ["חשוב רכב ירוק/חסכוני", "לא משנה"])
+    answers["resale_value"] = st.selectbox("שמירת ערך עתידית:", ["חשוב לשמור על ערך", "פחות חשוב"])
+    
     answers["extra"] = st.text_area("משהו נוסף?")
 
     submitted = st.form_submit_button("שלח וקבל המלצה")
@@ -205,8 +216,9 @@ if "df" in st.session_state:
                 return "background-color: #f5b7b1"
         return ""
 
-    styled_df = df.style.applymap(lambda v: highlight_numeric(v, low_good=True), subset=["עלות ביטוח", "תחזוקה שנתית"])\
-                        .applymap(lambda v: highlight_numeric(v, low_good=False), subset=["צריכת דלק"])
+    styled_df = df.style.applymap(lambda v: highlight_numeric(v, low_good=True), subset=["ביטוח חובה+צד ג' (דיסקליימר)", "תחזוקה שנתית"])\
+                        .applymap(lambda v: highlight_numeric(v, low_good=False), subset=["צריכת דלק"])\
+                        .applymap(lambda v: highlight_numeric(v, low_good=True), subset=["ירידת ערך"])
 
     st.subheader("📊 השוואת נתונים בין הדגמים")
     st.dataframe(styled_df, use_container_width=True)
