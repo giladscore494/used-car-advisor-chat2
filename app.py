@@ -55,7 +55,6 @@ def parse_gemini_json(answer):
 def filter_with_mot(answers, mot_file="car_models_israel.csv"):
     df = pd.read_csv(mot_file)
 
-    # סינון ראשוני לפי נתונים שיש במאגר
     df = df[
         (df["year"].between(int(answers["year_min"]), int(answers["year_max"]))) &
         (df["engine_cc"].between(int(answers["engine_cc_min"]), int(answers["engine_cc_max"]))) &
@@ -63,7 +62,6 @@ def filter_with_mot(answers, mot_file="car_models_israel.csv"):
         ((answers["gearbox"] == "לא משנה") | (df["automatic"] == (1 if answers["gearbox"] == "אוטומט" else 0)))
     ]
 
-    # המרה לרשימה של dicts
     return df.to_dict(orient="records")
 
 # =============================
@@ -81,10 +79,22 @@ def fetch_models_10params(answers, verified_models):
                 הנה רשימת רכבים שעברו סינון ראשוני ממאגר משרד התחבורה:
                 {verified_models}
 
-                כעת בצע סינון משלים לפי ההעדפות של המשתמש (כולל טורבו, שימוש עיקרי, גיל נהג, ותק רישיון,
-                עבר ביטוחי, תחזוקה, שמירת ערך, אמינות/נוחות, איכות סביבה).
+                כעת בצע סינון משלים לפי כל ההעדפות:
+                - סוג רכב: {answers['car_type']}
+                - מנוע טורבו: {answers['turbo']}
+                - שימוש עיקרי: {answers['usage']}
+                - גיל נהג: {answers['driver_age']}
+                - ותק רישיון: {answers['license_years']}
+                - עבר ביטוחי: {answers['insurance_history']}
+                - תקציב תחזוקה: {answers['maintenance_budget']}
+                - אמינות מול נוחות: {answers['reliability_vs_comfort']}
+                - שמירת ערך: {answers['resale_value']}
+                - שיקולי איכות סביבה: {answers['eco_pref']}
+                - תקציב כולל: {answers['budget_min']}–{answers['budget_max']} ₪
 
-                עבור כל דגם שנותר, החזר JSON עם השדות:
+                חשוב:
+                ❌ אל תחזיר שום דגם שלא עומד בכל הקריטריונים.
+                ✅ החזר אך ורק JSON תקני עם השדות:
                 {{
                   "Model Name": {{
                      "price_range": "טווח מחירון ביד שנייה (₪)",
@@ -99,8 +109,6 @@ def fetch_models_10params(answers, verified_models):
                      "parts_availability": "זמינות חלפים בישראל"
                   }}
                 }}
-
-                החזר JSON בלבד, ללא טקסט נוסף.
                 """
             }]
         }]
@@ -165,6 +173,12 @@ with st.form("car_form"):
     answers["engine_cc_max"] = int(st.text_input("נפח מנוע מקסימלי (סמ״ק):", "2000"))
     answers["year_min"] = st.text_input("שנת ייצור מינימלית:", "2000")
     answers["year_max"] = st.text_input("שנת ייצור מקסימלית:", "2020")
+
+    answers["car_type"] = st.selectbox(
+        "סוג רכב:",
+        ["סדאן", "האצ'בק", "SUV", "מיני", "סופר מיני", "סטיישן", "טנדר", "משפחתי"]
+    )
+
     answers["gearbox"] = st.radio("גיר:", ["לא משנה", "אוטומט", "ידני"])
     answers["turbo"] = st.radio("מנוע טורבו:", ["לא משנה", "כן", "לא"])
     answers["usage"] = st.radio("שימוש עיקרי:", ["עירוני", "בין-עירוני", "מעורב"])
@@ -192,7 +206,6 @@ if submitted:
     try:
         df_params = pd.DataFrame(params_data).T
 
-        # כותרות בעברית
         COLUMN_TRANSLATIONS = {
             "price_range": "טווח מחירון",
             "availability": "זמינות בישראל",
@@ -207,6 +220,8 @@ if submitted:
         }
         df_params.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
 
+        st.session_state["df_params"] = df_params
+
         st.subheader("🟩 טבלת 10 פרמטרים")
         st.dataframe(df_params, use_container_width=True)
 
@@ -216,27 +231,19 @@ if submitted:
 
     with st.spinner("⚡ GPT מסכם ומדרג..."):
         summary = final_recommendation_with_gpt(answers, params_data)
+        st.session_state["summary"] = summary
 
     st.subheader("🔎 ההמלצה הסופית שלך")
-    st.write(summary)
+    st.write(st.session_state["summary"])
 
-    save_log(answers, params_data, summary)
+    save_log(answers, params_data, st.session_state["summary"])
 
-    csv2 = df_params.to_csv(index=True, encoding="utf-8-sig")
+# =============================
+# הורדת טבלה מה-session
+# =============================
+if "df_params" in st.session_state:
+    csv2 = st.session_state["df_params"].to_csv(index=True, encoding="utf-8-sig")
     st.download_button("⬇️ הורד טבלת 10 פרמטרים", csv2, "params_data.csv", "text/csv")
-
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown(
-            f'<a href="https://infocar.co.il/" target="_blank">'
-            f'<button style="background-color:#117A65;color:white;padding:10px 20px;'
-            f'border:none;border-radius:8px;font-size:16px;cursor:pointer;">'
-            f'🔗 בדוק עבר ביטוחי ב-InfoCar</button></a>',
-            unsafe_allow_html=True
-        )
-    with col2:
-        st.markdown("🚗 רצוי לקחת את הרכב לבדיקה במכון בדיקה מורשה לפני רכישה.")
 
 # =============================
 # כפתור הורדה של כל ההיסטוריה
