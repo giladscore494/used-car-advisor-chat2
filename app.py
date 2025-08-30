@@ -144,6 +144,9 @@ with st.form("car_form"):
 
     submitted = st.form_submit_button("שלח וקבל המלצה")
 
+# =============================
+# טיפול אחרי שליחה
+# =============================
 if submitted:
     with st.spinner("🌐 Gemini מחפש רכבים מתאימים..."):
         models_data = fetch_models_data_with_gemini(answers)
@@ -151,45 +154,50 @@ if submitted:
     try:
         df = pd.DataFrame(models_data).T
         df.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
-
-        # =============================
-        # טבלה צבעונית
-        # =============================
-        def highlight_numeric(val, low_good=True):
-            try:
-                num = float(str(val).replace("₪", "").replace("%", "").replace(",", "").strip())
-            except:
-                return ""
-            if low_good:  # ערך נמוך טוב
-                if num <= 3000:
-                    return "background-color: #d4efdf"  # ירוק בהיר
-                elif num >= 7000:
-                    return "background-color: #f5b7b1"  # אדום בהיר
-            else:  # ערך גבוה טוב (למשל ק״מ לליטר)
-                if num >= 16:
-                    return "background-color: #d4efdf"
-                elif num <= 10:
-                    return "background-color: #f5b7b1"
-            return ""
-
-        styled_df = df.style.applymap(lambda v: highlight_numeric(v, low_good=True), subset=["עלות ביטוח", "תחזוקה שנתית"])\
-                            .applymap(lambda v: highlight_numeric(v, low_good=False), subset=["צריכת דלק"])
-
-        st.subheader("📊 השוואת נתונים בין הדגמים")
-        st.dataframe(styled_df, use_container_width=True)
-
-        csv = df.to_csv(index=True, encoding="utf-8-sig")
-        st.download_button("⬇️ הורד כ-CSV", csv, "car_advisor.csv", "text/csv")
-
+        st.session_state["df"] = df
     except:
         st.warning("⚠️ בעיה בנתוני JSON")
         st.write(models_data)
 
     with st.spinner("⚡ GPT מסכם ומדרג..."):
         summary = final_recommendation_with_gpt(answers, models_data)
+        st.session_state["summary"] = summary
 
+# =============================
+# הצגת תוצאות אם קיימות ב-Session
+# =============================
+if "df" in st.session_state:
+    df = st.session_state["df"]
+
+    def highlight_numeric(val, low_good=True):
+        try:
+            num = float(str(val).replace("₪", "").replace("%", "").replace(",", "").strip())
+        except:
+            return ""
+        if low_good:
+            if num <= 3000:
+                return "background-color: #d4efdf"
+            elif num >= 7000:
+                return "background-color: #f5b7b1"
+        else:
+            if num >= 16:
+                return "background-color: #d4efdf"
+            elif num <= 10:
+                return "background-color: #f5b7b1"
+        return ""
+
+    styled_df = df.style.applymap(lambda v: highlight_numeric(v, low_good=True), subset=["עלות ביטוח", "תחזוקה שנתית"])\
+                        .applymap(lambda v: highlight_numeric(v, low_good=False), subset=["צריכת דלק"])
+
+    st.subheader("📊 השוואת נתונים בין הדגמים")
+    st.dataframe(styled_df, use_container_width=True)
+
+    csv = df.to_csv(index=True, encoding="utf-8-sig")
+    st.download_button("⬇️ הורד כ-CSV", csv, "car_advisor.csv", "text/csv")
+
+if "summary" in st.session_state:
     st.subheader("🔎 ההמלצה הסופית שלך")
-    st.write(summary)
+    st.write(st.session_state["summary"])
 
     st.markdown("---")
     col1, col2 = st.columns(2)
