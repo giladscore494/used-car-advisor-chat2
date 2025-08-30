@@ -26,7 +26,7 @@ def safe_gemini_call(payload, model="gemini-2.0-flash"):
     headers = {"Content-Type": "application/json"}
     params = {"key": GEMINI_API_KEY}
     try:
-        r = requests.post(url, headers=headers, params=params, json=payload, timeout=60)
+        r = requests.post(url, headers=headers, params=params, json=payload, timeout=90)
         data = r.json()
         if "candidates" not in data:
             return f"שגיאת Gemini: {data}"
@@ -35,7 +35,7 @@ def safe_gemini_call(payload, model="gemini-2.0-flash"):
         return f"שגיאה: {e}"
 
 # =============================
-# שלב 1 – Gemini מחזיר טבלה מלאה
+# שלב 1 – Gemini מחזיר לפחות 10 דגמים עם טווח מחירים
 # =============================
 def fetch_models_data_with_gemini(answers):
     payload = {
@@ -46,13 +46,15 @@ def fetch_models_data_with_gemini(answers):
                 המשתמש נתן את ההעדפות הבאות:
                 {answers}
 
-                החזר אך ורק רכבים שמחירם ביד שנייה נופל בטווח התקציב {answers['budget_min']}–{answers['budget_max']} ₪.
-                אם אין התאמה – אל תחזיר את הדגם כלל.
+                החזר לפחות 10 דגמים מתאימים לרכישה בישראל,
+                אך ורק אם מחירם ביד שנייה נופל בטווח התקציב {answers['budget_min']}–{answers['budget_max']} ₪.
+                אם יש יותר מ-10 אפשריים – בחר את ה-10 הטובים ביותר לפי ניתוח של אמינות, עלות ביטוח, תחזוקה, ירידת ערך ובטיחות.
+                אם יש פחות מ-10 – החזר את כולם.
 
                 עבור כל דגם החזר JSON תקני בלבד (במרכאות כפולות) עם השדות:
                 {{
                   "Model Name": {{
-                     "price_range": "טווח מחירון אמיתי ביד שנייה (₪, רק בתוך הטווח)",
+                     "price_range": "טווח מחירון אמיתי ביד שנייה (₪, לדוגמה 6,000–8,000)",
                      "availability": "זמינות בישראל",
                      "insurance": "עלות ביטוח חובה + צד ג' ממוצעת (₪ לשנה, אמין)",
                      "license_fee": "אגרת רישוי/טסט שנתית (₪, לפי נפח מנוע)",
@@ -66,6 +68,8 @@ def fetch_models_data_with_gemini(answers):
                 }}
 
                 חובה:
+                - החזר מינימום 10 דגמים אם קיימים.
+                - החזר טווח מחירים אמיתי ולא מספר אחד.
                 - אל תחרוג מהתקציב הנתון.
                 - אל תמציא מספרים. אם מידע לא קיים – כתוב "לא נמצא".
                 - אל תוסיף טקסט מעבר ל-JSON.
@@ -171,7 +175,7 @@ if "df" in st.session_state:
 
     def highlight_numeric(val, low_good=True):
         try:
-            num = float(str(val).replace("₪", "").replace("%", "").replace(",", "").strip())
+            num = float(str(val).replace("₪", "").replace("%", "").replace(",", "").strip().split()[0])
         except:
             return ""
         if low_good:
