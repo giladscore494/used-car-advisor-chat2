@@ -35,6 +35,29 @@ def safe_gemini_call(payload, model="gemini-2.0-flash"):
         return f"שגיאה: {e}"
 
 # =============================
+# פיענוח JSON – כולל תיקון Markdown ומערכים
+# =============================
+def parse_gemini_json(answer):
+    cleaned = answer.strip()
+    # ננקה סימוני Markdown
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"```[a-zA-Z]*", "", cleaned)
+        cleaned = cleaned.replace("```", "").strip()
+
+    try:
+        data = json.loads(cleaned)
+        # אם זה מערך → נהפוך ל־dict מאוחד
+        if isinstance(data, list):
+            merged = {}
+            for obj in data:
+                if isinstance(obj, dict):
+                    merged.update(obj)
+            return merged
+        return data
+    except Exception as e:
+        return {"error": str(e), "raw": cleaned}
+
+# =============================
 # שלב 1 – Gemini מחזיר לפחות 10 דגמים עם טווח מחירים
 # =============================
 def fetch_models_data_with_gemini(answers):
@@ -78,15 +101,7 @@ def fetch_models_data_with_gemini(answers):
         }]
     }
     answer = safe_gemini_call(payload)
-
-    try:
-        match = re.search(r"\{.*\}", answer, re.S)
-        if match:
-            return json.loads(match.group(0))
-        else:
-            return {"error": "לא נמצא JSON", "raw": answer}
-    except Exception as e:
-        return {"error": str(e), "raw": answer}
+    return parse_gemini_json(answer)
 
 # =============================
 # שלב 2 – GPT מסכם ומדרג
@@ -159,7 +174,7 @@ if submitted:
         df = pd.DataFrame(models_data).T
         df.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
         st.session_state["df"] = df
-    except:
+    except Exception as e:
         st.warning("⚠️ בעיה בנתוני JSON")
         st.write(models_data)
 
