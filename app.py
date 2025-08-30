@@ -21,7 +21,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # =============================
 # קריאה בטוחה ל-Gemini
 # =============================
-def safe_gemini_call(payload, model="gemini-1.5-flash-latest"):
+def safe_gemini_call(payload, model="gemini-2.0-flash"):
     url = f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent"
     headers = {"Content-Type": "application/json"}
     params = {"key": GEMINI_API_KEY}
