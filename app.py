@@ -50,19 +50,112 @@ def parse_gemini_json(answer):
         return []
 
 # =============================
+# עזר: זיהוי סוגי דלק/הנעה כפי שמופיעים במאגר
+# =============================
+def _safe_str(x):
+    if pd.isna(x):
+        return ""
+    return str(x).strip()
+
+def _is_hybrid(fuel_text: str) -> bool:
+    """
+    היברידי = כל ערך שמכיל חשמל יחד עם דלק אחר (בנזין/חשמל, דיזל/חשמל),
+    או ערכים שמכילים מונחי היבריד: 'היברידי', 'נטען', 'Plug-in', 'PHEV'.
+    לא כולל 'חשמל' טהור בלבד.
+    """
+    s = _safe_str(fuel_text)
+    if not s:
+        return False
+    s_low = s.lower()
+    heb = "חשמל" in s and s.strip() != "חשמל"
+    keywords = any(k in s_low for k in ["היברידי", "נטען", "plug-in", "plug in", "phev"])
+    slash_mix = ("/" in s and "חשמל" in s and s.strip() != "חשמל")
+    return heb or keywords or slash_mix
+
+def _is_electric(fuel_text: str) -> bool:
+    """
+    חשמלי מלא. מזהה 'חשמל' / 'חשמלי' / מונחים נפוצים ל-BEV.
+    """
+    s = _safe_str(fuel_text)
+    if not s:
+        return False
+    s_low = s.lower()
+    # 'חשמל' לבד או גרסאות נפוצות
+    return s.strip() in ["חשמל", "חשמלי"] or any(k in s_low for k in ["bev", "battery electric"])
+
+def _match_conventional(fuel_text: str, wanted: str) -> bool:
+    """
+    התאמה לבנזין/דיזל שאינם היברידיים (לא מכילים חשמל או מילות היבריד).
+    """
+    s = _safe_str(fuel_text)
+    if not s:
+        return False
+    if _is_hybrid(s) or _is_electric(s):
+        return False
+    # התאמה גמישה לערך העיקרי (בנזין/דיזל), כולל וריאציות (לדוגמה 'בנזין 95', 'דיזל טורבו')
+    return wanted in s
+
+def _engine_mask(df: pd.DataFrame, wanted_engine: str) -> pd.Series:
+    """
+    יוצר מסכה לוגית לעמודת fuel בהתאם לבחירת המשתמש:
+    'בנזין' / 'דיזל' / 'היברידי' / 'חשמלי'
+    """
+    fuel_series = df["fuel"].astype(str).fillna("")
+    if wanted_engine == "היברידי":
+        return fuel_series.map(_is_hybrid)
+    elif wanted_engine == "חשמלי":
+        return fuel_series.map(_is_electric)
+    elif wanted_engine in ["בנזין", "דיזל"]:
+        return fuel_series.map(lambda s: _match_conventional(s, wanted_engine))
+    else:
+        # ברירת מחדל – לא מסנן לפי דלק
+        return pd.Series([True] * len(df), index=df.index)
+
+def _gearbox_mask(df: pd.DataFrame, wanted: str) -> pd.Series:
+    """
+    automatic: 1 = אוטומט, 0 = ידני.
+    'לא משנה' -> הכל True.
+    """
+    if wanted == "לא משנה":
+        return pd.Series([True] * len(df), index=df.index)
+    elif wanted == "אוטומט":
+        return df["automatic"].astype(int) == 1
+    else:  # "ידני"
+        return df["automatic"].astype(int) == 0
+
+# =============================
 # שלב 1 – סינון ראשוני מול מאגר משרד התחבורה
 # =============================
 def filter_with_mot(answers, mot_file="car_models_israel.csv"):
+    if not os.path.exists(mot_file):
+        st.error(f"❌ קובץ המאגר '{mot_file}' לא נמצא בתיקייה. ודא שהעלית אותו.")
+        return []
+
     df = pd.read_csv(mot_file)
 
-    df = df[
-        (df["year"].between(int(answers["year_min"]), int(answers["year_max"]))) &
-        (df["engine_cc"].between(int(answers["engine_cc_min"]), int(answers["engine_cc_max"]))) &
-        (df["fuel"] == answers["engine"]) &
-        ((answers["gearbox"] == "לא משנה") | (df["automatic"] == (1 if answers["gearbox"] == "אוטומט" else 0)))
-    ]
+    # המרות בטוחות לסוגים מספריים
+    for col in ["year", "engine_cc"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    return df.to_dict(orient="records")
+    year_min = int(answers["year_min"])
+    year_max = int(answers["year_max"])
+    cc_min = int(answers["engine_cc_min"])
+    cc_max = int(answers["engine_cc_max"])
+
+    mask_year = df["year"].between(year_min, year_max, inclusive="both")
+    mask_cc = df["engine_cc"].between(cc_min, cc_max, inclusive="both")
+
+    # מסכת דלק/הנעה – כולל טיפול נכון בהיברידי
+    mask_fuel = _engine_mask(df, answers["engine"])
+
+    # מסכת תיבת הילוכים
+    mask_gear = _gearbox_mask(df, answers["gearbox"])
+
+    df_filtered = df[mask_year & mask_cc & mask_fuel & mask_gear].copy()
+
+    # החזרה כמילונים
+    return df_filtered.to_dict(orient="records")
 
 # =============================
 # שלב 2 – Gemini בונה טבלת 10 פרמטרים (סינון משלים)
@@ -173,7 +266,7 @@ with st.form("car_form"):
     answers["engine"] = st.radio(
         "מנוע מועדף:",
         ["בנזין", "דיזל", "היברידי", "חשמלי"],
-        help="סוג המנוע משפיע על צריכת הדלק, תחזוקה ועלויות – בנזין זול לתחזוקה, דיזל חסכוני בנסיעות ארוכות, היברידי/חשמלי ירוקים יותר."
+        help="במאגר הממשלתי 'היברידי' מופיע לרוב כ'בנזין/חשמל' או 'דיזל/חשמל'. הסינון כאן תומך בזה אוטומטית."
     )
 
     answers["engine_cc_min"] = int(st.text_input("נפח מנוע מינימלי (סמ״ק):", "1200"))
@@ -193,7 +286,7 @@ with st.form("car_form"):
     answers["gearbox"] = st.radio(
         "גיר:",
         ["לא משנה", "אוטומט", "ידני"],
-        help="גיר אוטומט נוח לנהיגה בעיר, ידני זול יותר בתחזוקה ודלק."
+        help="אוטומט = 1, ידני = 0 בעמודת המאגר; הסינון מותאם לכך."
     )
 
     answers["turbo"] = st.radio(
