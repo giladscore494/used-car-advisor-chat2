@@ -56,7 +56,7 @@ def parse_gemini_json(answer):
         return {"error": str(e), "raw": cleaned}
 
 # =============================
-# שלב 1 – Gemini מחזיר לפחות 10 דגמים עם טווח מחירים
+# שלב 1 – Gemini בוחר דגמים מתאימים לפי כל הקריטריונים
 # =============================
 def fetch_models_data_with_gemini(answers):
     payload = {
@@ -67,18 +67,26 @@ def fetch_models_data_with_gemini(answers):
                 המשתמש נתן את ההעדפות הבאות:
                 {answers}
 
-                החזר לפחות 10 דגמים מתאימים לרכישה בישראל,
-                אך ורק אם מחירם ביד שנייה נופל בטווח התקציב {answers['budget_min']}–{answers['budget_max']} ₪.
-                אם יש יותר מ-10 אפשריים – בחר את ה-10 הטובים ביותר לפי ניתוח של אמינות, עלות ביטוח, תחזוקה, ירידת ערך ובטיחות.
-                אם יש פחות מ-10 – החזר את כולם.
+                בחר לפחות 10 דגמים מתאימים שנמכרים בישראל
+                אך ורק אם הם עומדים בכל הקריטריונים האלו:
+                - מחיר ביד שנייה בטווח {answers['budget_min']}–{answers['budget_max']} ₪
+                - נפח מנוע: {answers['engine_size']} סמ״ק
+                - שנות ייצור: {answers['year_range']}
+                - סוג רכב: {answers['car_type']}
+                - שימוש עיקרי: {answers['usage']}
+                - גודל רכב: {answers['size']}
+                - התאם ביטוח לפי: גיל {answers['driver_age']}, ותק {answers['license_years']}, עבר ביטוחי {answers['insurance_history']}
+                - התאם תחזוקה לפי: {answers['maintenance_budget']}
+                - אם המשתמש ביקש אמינות מעל הכול → עדיפות לרכבים אמינים
+                - אם המשתמש ביקש שמירת ערך → עדיפות לרכבים ששומרים ערך
 
                 עבור כל דגם החזר JSON תקני בלבד עם השדות:
                 {{
                   "Model Name": {{
-                     "price_range": "טווח מחירון אמיתי ביד שנייה (₪, לדוגמה 6,000–8,000)",
+                     "price_range": "טווח מחירון ביד שנייה (₪)",
                      "availability": "זמינות בישראל",
-                     "insurance_total": "עלות ביטוח חובה + צד ג' ממוצעת (₪ לשנה, עם דיסקליימר שהמחיר משתנה לפי גיל, ותק ועבר ביטוחי)",
-                     "license_fee": "אגרת רישוי/טסט שנתית (₪, לפי נפח מנוע)",
+                     "insurance_total": "עלות ביטוח חובה + צד ג' (₪, טווח עם דיסקליימר)",
+                     "license_fee": "אגרת רישוי/טסט שנתית (₪)",
                      "maintenance": "תחזוקה שנתית ממוצעת (₪)",
                      "common_issues": "תקלות נפוצות",
                      "fuel_consumption": "צריכת דלק אמיתית (ק״מ לליטר)",
@@ -89,10 +97,8 @@ def fetch_models_data_with_gemini(answers):
                 }}
 
                 חובה:
+                - אל תציע דגמים שלא עומדים בקריטריונים.
                 - החזר מינימום 10 דגמים אם קיימים.
-                - החזר טווח מחירים אמיתי ולא מספר אחד.
-                - אל תחרוג מהתקציב הנתון.
-                - אל תמציא מספרים. אם מידע לא קיים – כתוב "לא נמצא".
                 - אל תוסיף טקסט מעבר ל-JSON.
                 """
             }]
@@ -126,14 +132,15 @@ def final_recommendation_with_gpt(answers, models_data):
     return response.choices[0].message.content
 
 # =============================
-# פונקציית לוג – שמירת כל שאלון
+# פונקציית לוג – שומר JSON מקורי עם שמות הדגמים
 # =============================
-def save_log(answers, df, summary, filename="car_advisor_logs.csv"):
+def save_log(answers, models_data, summary, filename="car_advisor_logs.csv"):
     record = {
         "timestamp": datetime.datetime.now().isoformat(),
         "answers": json.dumps(answers, ensure_ascii=False),
         "summary": summary,
-        "models_data": df.to_json(force_ascii=False)
+        # ✅ שומר JSON המקורי עם שמות הדגמים
+        "models_data": json.dumps(models_data, ensure_ascii=False)
     }
 
     if os.path.exists(filename):
@@ -166,7 +173,7 @@ COLUMN_TRANSLATIONS = {
 
 with st.form("car_form"):
     answers = {}
-    # שאלות קיימות
+    # שאלות בסיסיות
     answers["budget_range"] = st.selectbox("טווח תקציב:", ["5–10K", "10–20K", "20–40K", "40K+"])
     answers["budget_min"] = int(st.text_input("תקציב מינימלי (₪)", "10000"))
     answers["budget_max"] = int(st.text_input("תקציב מקסימלי (₪)", "20000"))
@@ -213,9 +220,9 @@ if submitted:
         summary = final_recommendation_with_gpt(answers, models_data)
         st.session_state["summary"] = summary
 
-    # ✅ שמירת לוג
+    # ✅ שמירת לוג עם שמות דגמים
     try:
-        save_log(answers, st.session_state["df"], st.session_state["summary"])
+        save_log(answers, models_data, st.session_state["summary"])
     except Exception as e:
         st.warning(f"בעיה בשמירת הלוג: {e}")
 
