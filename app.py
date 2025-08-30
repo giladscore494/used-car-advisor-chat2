@@ -5,8 +5,6 @@ import requests
 import datetime
 import streamlit as st
 import pandas as pd
-import unidecode
-from deep_translator import GoogleTranslator
 from openai import OpenAI
 
 # =============================
@@ -20,15 +18,6 @@ if not OPENAI_API_KEY or not GEMINI_API_KEY:
     st.stop()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-
-# =============================
-# תרגום אוטומטי לעברית
-# =============================
-def translate_to_hebrew(name: str) -> str:
-    try:
-        return GoogleTranslator(source="en", target="iw").translate(name)
-    except:
-        return name
 
 # =============================
 # קריאה בטוחה ל-Gemini
@@ -60,17 +49,7 @@ def parse_gemini_json(answer):
         return {"error": str(e), "raw": cleaned}
 
 # =============================
-# ניקוי שם (עברית ≠ אנגלית)
-# =============================
-def normalize_name(name: str) -> str:
-    text = str(name)
-    if re.search(r'[a-zA-Z]', text):  # אנגלית
-        return unidecode.unidecode(text).lower().replace(" ", "").replace("-", "")
-    # עברית
-    return re.sub(r"[\s\-]", "", text).lower()
-
-# =============================
-# שלב 1 – Gemini מציע רשימת דגמים
+# שלב 1 – Gemini מחזיר רשימת דגמים בעברית בלבד
 # =============================
 def fetch_candidate_models(answers):
     payload = {
@@ -81,11 +60,10 @@ def fetch_candidate_models(answers):
                 המשתמש נתן את ההעדפות הבאות:
                 {answers}
 
-                החזר רשימה של לפחות 10 דגמים מתאימים,
-                כולל התחשבות בדרישה לגבי טורבו אם צוינה.
+                החזר רשימה של לפחות 10 דגמים מתאימים בעברית בלבד כפי שהם נמכרים בישראל,
+                בפורמט JSON בלבד. לדוגמה:
+                ["טויוטה קורולה", "מאזדה 3", "סקודה אוקטביה"]
 
-                הפלט חייב להיות בפורמט JSON פשוט:
-                ["Model1", "Model2", "Model3", ...]
                 אל תוסיף טקסט נוסף מעבר ל-JSON.
                 """
             }]
@@ -95,26 +73,22 @@ def fetch_candidate_models(answers):
     return parse_gemini_json(answer)
 
 # =============================
-# שלב 2 – סינון מול משרד התחבורה
+# שלב 2 – סינון מול משרד התחבורה (עם fallback)
 # =============================
-def filter_models_by_registry(candidate_models, answers, df_cars, debug=False):
+def filter_models_by_registry(candidate_models, answers, df_cars):
     valid_models = []
-    df_cars["model_norm"] = df_cars["model"].astype(str).apply(normalize_name)
-
-    debug_rows = []
 
     for model_name in candidate_models:
-        model_name_he = translate_to_hebrew(model_name)
-        norm = normalize_name(model_name_he)
+        exists = df_cars[df_cars["model"].astype(str).str.contains(model_name, na=False, regex=False)]
 
-        exists = df_cars[df_cars["model_norm"].str.contains(norm, na=False, regex=False)]
-
-        debug_rows.append({
-            "original": model_name,
-            "hebrew": model_name_he,
-            "normalized": norm,
-            "matches_in_registry": len(exists)
-        })
+        # fallback: חיפוש לפי מילה אחרונה או 4 אותיות ראשונות
+        if exists.empty:
+            parts = model_name.split()
+            if len(parts) > 1:
+                last_word = parts[-1]
+                exists = df_cars[df_cars["model"].astype(str).str.contains(last_word, na=False, regex=False)]
+            if exists.empty and len(model_name) >= 4:
+                exists = df_cars[df_cars["model"].astype(str).str.contains(model_name[:4], na=False, regex=False)]
 
         if exists.empty:
             continue
@@ -122,6 +96,9 @@ def filter_models_by_registry(candidate_models, answers, df_cars, debug=False):
         # גיר
         if answers.get("gearbox") == "אוטומט":
             if exists["automatic"].max() != 1:
+                continue
+        elif answers.get("gearbox") == "ידני":
+            if exists["automatic"].min() != 0:
                 continue
 
         # דלק
@@ -132,10 +109,10 @@ def filter_models_by_registry(candidate_models, answers, df_cars, debug=False):
 
         # טורבו
         if answers.get("turbo") == "כן":
-            if "TURBO" not in model_name.upper():
+            if "טורבו" not in model_name and "TURBO" not in model_name.upper():
                 continue
         elif answers.get("turbo") == "לא":
-            if "TURBO" in model_name.upper():
+            if "טורבו" in model_name or "TURBO" in model_name.upper():
                 continue
 
         # שנת ייצור
@@ -146,11 +123,7 @@ def filter_models_by_registry(candidate_models, answers, df_cars, debug=False):
             if not any((years >= year_min) & (years <= year_max)):
                 continue
 
-        valid_models.append(model_name_he)
-
-    if debug:
-        st.markdown("### 🔍 Debug – שלבי סינון")
-        st.dataframe(pd.DataFrame(debug_rows))
+        valid_models.append(model_name)
 
     return valid_models
 
@@ -284,7 +257,6 @@ with st.form("car_form"):
     answers["eco"] = st.radio("שיקולי איכות סביבה:", ["לא משנה", "חשוב מאוד"])
     answers["resale_value"] = st.radio("שמירת ערך עתידית:", ["חשוב", "פחות חשוב"])
     answers["extra"] = st.text_area("משהו נוסף?")
-    debug_mode = st.checkbox("הצג Debug Mode (לראות שלבי סינון)")
 
     submitted = st.form_submit_button("שלח וקבל המלצה")
 
@@ -295,7 +267,7 @@ if submitted:
     st.write(candidate_models)
 
     with st.spinner("🧹 סינון מול משרד התחבורה..."):
-        valid_models = filter_models_by_registry(candidate_models, answers, df_cars, debug=debug_mode)
+        valid_models = filter_models_by_registry(candidate_models, answers, df_cars)
     st.markdown("### ✅ דגמים אחרי סינון משרד התחבורה")
     st.write(valid_models)
 
@@ -327,7 +299,6 @@ if st.session_state["summary_text"] is not None:
     st.subheader("🔎 ההמלצה הסופית שלך")
     st.write(st.session_state["summary_text"])
 
-    # הערות קבועות
     st.markdown("---")
     st.markdown("🔗 בדוק עבר ביטוחי במרכז הסליקה")
     st.markdown("🚗 רצוי לקחת את הרכב לבדיקה במכון בדיקה מורשה")
