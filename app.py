@@ -40,66 +40,51 @@ def safe_gemini_call(payload, model="gemini-2.0-flash"):
 # =============================
 def parse_gemini_json(answer):
     cleaned = answer.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"```[a-zA-Z]*", "", cleaned)
-        cleaned = cleaned.replace("```", "").strip()
+    if "```" in cleaned:
+        match = re.search(r"```(?:json)?(.*?)```", cleaned, re.DOTALL)
+        if match:
+            cleaned = match.group(1).strip()
     try:
         return json.loads(cleaned)
-    except Exception as e:
-        return {"error": str(e), "raw": cleaned}
+    except Exception:
+        return []
 
 # =============================
-# שלב 1 – Gemini מחזיר רכבים בפורמט משרד התחבורה
+# שלב 1 – סינון ראשוני מול מאגר משרד התחבורה
 # =============================
-def fetch_models_from_mot_format(answers, mot_file="car_models_israel.csv"):
-    mot_df = pd.read_csv(mot_file)
-    sample = mot_df.head(20).to_dict(orient="records")
+def filter_with_mot(answers, mot_file="car_models_israel.csv"):
+    df = pd.read_csv(mot_file)
 
+    # סינון ראשוני לפי נתונים שיש במאגר
+    df = df[
+        (df["year"].between(int(answers["year_min"]), int(answers["year_max"]))) &
+        (df["engine_cc"].between(int(answers["engine_cc_min"]), int(answers["engine_cc_max"]))) &
+        (df["fuel"] == answers["engine"]) &
+        ((answers["gearbox"] == "לא משנה") | (df["automatic"] == (1 if answers["gearbox"] == "אוטומט" else 0)))
+    ]
+
+    # המרה לרשימה של dicts
+    return df.to_dict(orient="records")
+
+# =============================
+# שלב 2 – Gemini בונה טבלת 10 פרמטרים (סינון משלים)
+# =============================
+def fetch_models_10params(answers, verified_models):
     payload = {
         "contents": [{
             "role": "user",
             "parts": [{
                 "text": f"""
-                הנה דוגמה למבנה הטבלה שלי:
-                {sample}
-
                 המשתמש נתן את ההעדפות הבאות:
                 {answers}
 
-                החזר לפחות 10 דגמים מתאימים שנמכרים בישראל,
-                אך ורק אם הם עומדים בקריטריונים:
-                - מחיר {answers['budget_min']}–{answers['budget_max']} ₪
-                - שנות ייצור {answers['year_range']}
-                - סוג רכב {answers['car_type']}
-                - סוג גיר {answers['gearbox']}
-                - טווח נפח מנוע {answers['engine_cc_min']}–{answers['engine_cc_max']} סמ״ק
-                - מנוע טורבו: {answers['turbo']}
-                - מנוע מועדף: {answers['engine']}
+                הנה רשימת רכבים שעברו סינון ראשוני ממאגר משרד התחבורה:
+                {verified_models}
 
-                החזר JSON בפורמט זהה לדוגמה:
-                רשימה של אובייקטים עם השדות:
-                brand, model, year, engine_cc, fuel, automatic, turbo
-                """
-            }]
-        }]
-    }
+                כעת בצע סינון משלים לפי ההעדפות של המשתמש (כולל טורבו, שימוש עיקרי, גיל נהג, ותק רישיון,
+                עבר ביטוחי, תחזוקה, שמירת ערך, אמינות/נוחות, איכות סביבה).
 
-    answer = safe_gemini_call(payload)
-    return parse_gemini_json(answer)
-
-# =============================
-# שלב 2 – Gemini מחזיר טבלת 10 פרמטרים
-# =============================
-def fetch_models_10params(verified_models):
-    payload = {
-        "contents": [{
-            "role": "user",
-            "parts": [{
-                "text": f"""
-                בנה טבלה של הדגמים הבאים בלבד:
-                {', '.join([m['brand'] + ' ' + m['model'] for m in verified_models])}
-
-                עבור כל דגם החזר JSON עם השדות:
+                עבור כל דגם שנותר, החזר JSON עם השדות:
                 {{
                   "Model Name": {{
                      "price_range": "טווח מחירון ביד שנייה (₪)",
@@ -114,7 +99,8 @@ def fetch_models_10params(verified_models):
                      "parts_availability": "זמינות חלפים בישראל"
                   }}
                 }}
-                החזר JSON תקני בלבד.
+
+                החזר JSON בלבד, ללא טקסט נוסף.
                 """
             }]
         }]
@@ -125,13 +111,10 @@ def fetch_models_10params(verified_models):
 # =============================
 # שלב 3 – GPT מסכם ומדרג
 # =============================
-def final_recommendation_with_gpt(answers, mot_data, params_data):
+def final_recommendation_with_gpt(answers, params_data):
     text = f"""
     תשובות המשתמש:
     {answers}
-
-    נתוני משרד התחבורה:
-    {mot_data}
 
     נתוני 10 פרמטרים:
     {params_data}
@@ -152,11 +135,10 @@ def final_recommendation_with_gpt(answers, mot_data, params_data):
 # =============================
 # פונקציית לוג
 # =============================
-def save_log(answers, mot_data, params_data, summary, filename="car_advisor_logs.csv"):
+def save_log(answers, params_data, summary, filename="car_advisor_logs.csv"):
     record = {
         "timestamp": datetime.datetime.now().isoformat(),
         "answers": json.dumps(answers, ensure_ascii=False),
-        "mot_data": json.dumps(mot_data, ensure_ascii=False),
         "params_data": json.dumps(params_data, ensure_ascii=False),
         "summary": summary,
     }
@@ -181,15 +163,18 @@ with st.form("car_form"):
     answers["engine"] = st.radio("מנוע מועדף:", ["בנזין", "דיזל", "היברידי", "חשמלי"])
     answers["engine_cc_min"] = int(st.text_input("נפח מנוע מינימלי (סמ״ק):", "1200"))
     answers["engine_cc_max"] = int(st.text_input("נפח מנוע מקסימלי (סמ״ק):", "2000"))
+    answers["year_min"] = st.text_input("שנת ייצור מינימלית:", "2000")
+    answers["year_max"] = st.text_input("שנת ייצור מקסימלית:", "2020")
+    answers["gearbox"] = st.radio("גיר:", ["לא משנה", "אוטומט", "ידני"])
     answers["turbo"] = st.radio("מנוע טורבו:", ["לא משנה", "כן", "לא"])
-    answers["year_range"] = st.text_input("שנות ייצור (לדוגמה: 1970–2015):", "2010–2015")
-    answers["car_type"] = st.selectbox("סוג רכב:", ["סדאן", "האצ'בק", "SUV", "טנדר", "משפחתי"])
-    answers["gearbox"] = st.radio("גיר:", ["לא משנה", "אוטומט", "ידני", "רובוטי"])
     answers["usage"] = st.radio("שימוש עיקרי:", ["עירוני", "בין-עירוני", "מעורב"])
     answers["driver_age"] = st.selectbox("גיל הנהג הראשי:", ["עד 21", "21–24", "25–34", "35+"])
     answers["license_years"] = st.selectbox("ותק רישיון נהיגה:", ["פחות משנה", "1–3 שנים", "3–5 שנים", "מעל 5 שנים"])
     answers["insurance_history"] = st.selectbox("עבר ביטוחי/תעבורתי:", ["ללא", "תאונה אחת", "מספר תביעות"])
     answers["maintenance_budget"] = st.selectbox("יכולת תחזוקה:", ["מתחת 3,000 ₪", "3,000–5,000 ₪", "מעל 5,000 ₪"])
+    answers["reliability_vs_comfort"] = st.selectbox("מה חשוב יותר?", ["אמינות מעל הכול", "איזון אמינות ונוחות", "נוחות/ביצועים"])
+    answers["eco_pref"] = st.selectbox("שיקולי איכות סביבה:", ["חשוב רכב ירוק/חסכוני", "לא משנה"])
+    answers["resale_value"] = st.selectbox("שמירת ערך עתידית:", ["חשוב לשמור על ערך", "פחות חשוב"])
     answers["extra"] = st.text_area("משהו נוסף שתרצה לציין?")
 
     submitted = st.form_submit_button("שלח וקבל המלצה")
@@ -198,33 +183,44 @@ with st.form("car_form"):
 # טיפול אחרי שליחה
 # =============================
 if submitted:
-    with st.spinner("🌐 Gemini מחפש רכבים בפורמט משרד התחבורה..."):
-        mot_data = fetch_models_from_mot_format(answers)
-
-    st.subheader("🟦 רכבים מאומתים (נתוני משרד התחבורה)")
-    st.write(mot_data)
+    with st.spinner("📊 סינון ראשוני מול מאגר משרד התחבורה..."):
+        verified_models = filter_with_mot(answers)
 
     with st.spinner("🌐 Gemini בונה טבלת 10 פרמטרים..."):
-        params_data = fetch_models_10params(mot_data)
+        params_data = fetch_models_10params(answers, verified_models)
 
     try:
         df_params = pd.DataFrame(params_data).T
+
+        # כותרות בעברית
+        COLUMN_TRANSLATIONS = {
+            "price_range": "טווח מחירון",
+            "availability": "זמינות בישראל",
+            "insurance_total": "ביטוח חובה + צד ג׳",
+            "license_fee": "אגרת רישוי",
+            "maintenance": "תחזוקה שנתית",
+            "common_issues": "תקלות נפוצות",
+            "fuel_consumption": "צריכת דלק (ק״מ לליטר)",
+            "depreciation": "ירידת ערך (%)",
+            "safety": "דירוג בטיחות (כוכבים)",
+            "parts_availability": "זמינות חלפים"
+        }
+        df_params.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
+
         st.subheader("🟩 טבלת 10 פרמטרים")
         st.dataframe(df_params, use_container_width=True)
+
     except Exception as e:
         st.warning("⚠️ בעיה בנתוני JSON")
         st.write(params_data)
 
     with st.spinner("⚡ GPT מסכם ומדרג..."):
-        summary = final_recommendation_with_gpt(answers, mot_data, params_data)
+        summary = final_recommendation_with_gpt(answers, params_data)
 
     st.subheader("🔎 ההמלצה הסופית שלך")
     st.write(summary)
 
-    save_log(answers, mot_data, params_data, summary)
-
-    csv1 = pd.DataFrame(mot_data).to_csv(index=False, encoding="utf-8-sig")
-    st.download_button("⬇️ הורד נתוני משרד התחבורה", csv1, "mot_data.csv", "text/csv")
+    save_log(answers, params_data, summary)
 
     csv2 = df_params.to_csv(index=True, encoding="utf-8-sig")
     st.download_button("⬇️ הורד טבלת 10 פרמטרים", csv2, "params_data.csv", "text/csv")
