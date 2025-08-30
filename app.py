@@ -83,8 +83,14 @@ def fetch_models_list_with_gemini(answers):
 def filter_models_by_mot(models_list, mot_file="car_models_israel.csv"):
     try:
         mot_df = pd.read_csv(mot_file)
-        mot_models = mot_df['model_name'].dropna().unique().tolist()
+
+        # יצירת עמודה מלאה: מותג + דגם
+        mot_df["full_name"] = mot_df["brand"].astype(str).str.strip() + " " + mot_df["model"].astype(str).str.strip()
+        mot_models = mot_df["full_name"].dropna().unique().tolist()
+
+        # סינון רשימת Gemini מול המלאים
         verified = [m for m in models_list if m in mot_models]
+
         return verified
     except Exception as e:
         return []
