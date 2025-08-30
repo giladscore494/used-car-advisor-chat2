@@ -159,7 +159,7 @@ with st.form("car_form"):
     answers["usage"] = st.radio("שימוש עיקרי:", ["עירוני", "בין-עירוני", "מעורב"])
     answers["size"] = st.selectbox("גודל רכב:", ["קטן", "משפחתי", "SUV", "טנדר"])
     
-    # שאלות קריטיות חדשות
+    # שאלות קריטיות נוספות
     answers["driver_age"] = st.selectbox("גיל הנהג הראשי:", ["עד 21", "21–24", "25–34", "35+"])
     answers["license_years"] = st.selectbox("ותק רישיון נהיגה:", ["פחות משנה", "1–3 שנים", "3–5 שנים", "מעל 5 שנים"])
     answers["insurance_history"] = st.selectbox("עבר ביטוחי/תעבורתי:", ["ללא תביעות/תאונות/דוחות", "תאונה אחת/דוח", "מספר תביעות/שלילה"])
@@ -216,9 +216,18 @@ if "df" in st.session_state:
                 return "background-color: #f5b7b1"
         return ""
 
-    styled_df = df.style.applymap(lambda v: highlight_numeric(v, low_good=True), subset=["ביטוח חובה+צד ג' (דיסקליימר)", "תחזוקה שנתית"])\
-                        .applymap(lambda v: highlight_numeric(v, low_good=False), subset=["צריכת דלק"])\
-                        .applymap(lambda v: highlight_numeric(v, low_good=True), subset=["ירידת ערך"])
+    subsets = {
+        "low_good": ["ביטוח חובה+צד ג' (דיסקליימר)", "תחזוקה שנתית", "ירידת ערך"],
+        "high_good": ["צריכת דלק"]
+    }
+
+    styled_df = df.style
+    for col in subsets["low_good"]:
+        if col in df.columns:
+            styled_df = styled_df.applymap(lambda v: highlight_numeric(v, low_good=True), subset=[col])
+    for col in subsets["high_good"]:
+        if col in df.columns:
+            styled_df = styled_df.applymap(lambda v: highlight_numeric(v, low_good=False), subset=[col])
 
     st.subheader("📊 השוואת נתונים בין הדגמים")
     st.dataframe(styled_df, use_container_width=True)
@@ -239,6 +248,10 @@ if "summary" in st.session_state:
             f'border:none;border-radius:8px;font-size:16px;cursor:pointer;">'
             f'🔗 בדוק עבר ביטוחי ב-InfoCar</button></a>',
             unsafe_allow_html=True
+        )
+    with col2:
+        st.markdown("🚗 רצוי לקחת את הרכב לבדיקה במכון בדיקה מורשה לפני רכישה.")
+
         )
     with col2:
         st.markdown("🚗 רצוי לקחת את הרכב לבדיקה במכון בדיקה מורשה לפני רכישה.")
