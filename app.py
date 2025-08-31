@@ -143,18 +143,45 @@ def filter_with_mot(answers, mot_file="car_models_israel.csv"):
     return df_filtered.to_dict(orient="records")
 
 # =============================
-# אימות מחיר קשיח בקוד
+# אימות מחיר משופר
 # =============================
+def parse_price_range(txt: str):
+    """
+    ממיר טקסט של טווח מחיר לטווח מספרי (min,max).
+    תומך גם ב-"85 אלף", בפסיקים ובמינוס/מקף.
+    """
+    if not txt or not isinstance(txt, str):
+        return None, None
+    txt = txt.replace(",", "").replace("₪", "").replace("-", " ").replace("–", " ")
+    parts = txt.split()
+    nums = []
+    for i, p in enumerate(parts):
+        if p.isdigit():
+            nums.append(int(p))
+        elif "אלף" in p:
+            try:
+                val = int(re.sub(r"\D", "", p)) * 1000
+                nums.append(val)
+            except:
+                pass
+        else:
+            try:
+                nums.append(int(re.sub(r"\D", "", p)))
+            except:
+                pass
+    if len(nums) >= 2:
+        return min(nums), max(nums)
+    elif len(nums) == 1:
+        return nums[0], nums[0]
+    return None, None
+
 def filter_by_budget(df, budget_min, budget_max):
     def _row_in_budget(row):
-        txt = str(row.get("טווח מחירון", ""))
-        nums = re.findall(r"\d+", txt.replace(",", ""))
-        if len(nums) >= 2:
-            pmin, pmax = int(nums[0]), int(nums[1])
-            return (pmax >= budget_min) and (pmin <= budget_max)
-        return False
-    df_filtered = df[df.apply(_row_in_budget, axis=1)].copy()
-    return df_filtered
+        pmin, pmax = parse_price_range(str(row.get("טווח מחירון", "")))
+        if pmin is None or pmax is None:
+            return False
+        return (pmax >= budget_min) and (pmin <= budget_max)
+    return df[df.apply(_row_in_budget, axis=1)].copy()
 
 # =============================
 # Gemini – פרומפט נפרד להיברידי/חשמלי
@@ -199,7 +226,6 @@ def fetch_models_10params(answers, verified_models):
         }
         answer = safe_gemini_call(payload)
         result = parse_gemini_json(answer)
-
         try:
             df_check = pd.DataFrame(result).T
             df_check = filter_by_budget(df_check, int(answers["budget_min"]), int(answers["budget_max"]))
@@ -330,7 +356,6 @@ if submitted:
         }
         df_params.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
 
-        # סינון קשיח להיברידי/חשמלי
         if answers["engine"] in ["היברידי","היברידי-בנזין","היברידי-דיזל","חשמלי"]:
             df_params = filter_by_budget(df_params, int(answers["budget_min"]), int(answers["budget_max"]))
             if df_params.empty:
@@ -352,4 +377,4 @@ if submitted:
 
 if "df_params" in st.session_state:
     csv2 = st.session_state["df_params"].to_csv(index=True, encoding="utf-8-sig")
-    st.download_button("⬇️ הורד טבלת 10 פרמטרים", csv2, "params_data.csv", "text/csv")
+    st.download_button("⬇️ הורד טבלת 10 פרמטרים", csv2, "params
