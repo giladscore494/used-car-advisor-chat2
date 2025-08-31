@@ -377,4 +377,4 @@ if submitted:
 
 if "df_params" in st.session_state:
     csv2 = st.session_state["df_params"].to_csv(index=True, encoding="utf-8-sig")
-    st.download_button("⬇️ הורד טבלת 10 פרמטרים", csv2, "params
+    st.download_button("⬇️ הורד טבלת 10 פרמטרים", csv2, "params_data.csv", "text/csv")
