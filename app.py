@@ -57,7 +57,6 @@ def _safe_str(x):
         return ""
     return str(x).strip()
 
-# --- פונקציות לנרמול ---
 def normalize_fuel_type(fuel_text: str) -> str:
     if not fuel_text or pd.isna(fuel_text):
         return ""
@@ -144,57 +143,6 @@ def filter_with_mot(answers, mot_file="car_models_israel.csv"):
     return df_filtered.to_dict(orient="records")
 
 # =============================
-# Gemini – עם פרומפט מותאם
-# =============================
-def fetch_models_10params(answers, verified_models):
-    if answers["engine"] in ["היברידי", "היברידי-בנזין", "היברידי-דיזל", "חשמלי"]:
-        prompt_rules = """
-        ❌ אסור להחזיר דגם שלא מופיע ברשימת המאגר.
-        ❌ אסור להמציא טווחי מחיר.
-        ❌ אם אין רכבים מתאימים לתקציב – החזר JSON ריק {}.
-        ✅ עליך להשתמש רק בדגמים שברשימה ולבדוק את התקציב.
-        """
-    else:
-        prompt_rules = """
-        ❌ אל תחזיר שום דגם שלא עומד בקריטריונים.
-        ✅ החזר אך ורק JSON תקני.
-        """
-    payload = {
-        "contents": [{
-            "role": "user",
-            "parts": [{
-                "text": f"""
-                המשתמש נתן את ההעדפות הבאות:
-                {answers}
-
-                הנה רשימת רכבים שעברו סינון ראשוני ממאגר משרד התחבורה:
-                {verified_models}
-
-                {prompt_rules}
-
-                החזר אך ורק JSON תקני עם השדות:
-                {{
-                  "Model Name": {{
-                     "price_range": "טווח מחירון ביד שנייה (₪)",
-                     "availability": "זמינות בישראל",
-                     "insurance_total": "עלות ביטוח חובה + צד ג' (₪)",
-                     "license_fee": "אגרת רישוי/טסט שנתית (₪)",
-                     "maintenance": "תחזוקה שנתית ממוצעת (₪)",
-                     "common_issues": "תקלות נפוצות",
-                     "fuel_consumption": "צריכת דלק אמיתית (ק״מ לליטר)",
-                     "depreciation": "ירידת ערך ממוצעת (%)",
-                     "safety": "דירוג בטיחות (כוכבים)",
-                     "parts_availability": "זמינות חלפים בישראל"
-                  }}
-                }}
-                """
-            }]
-        }]
-    }
-    answer = safe_gemini_call(payload)
-    return parse_gemini_json(answer)
-
-# =============================
 # אימות מחיר קשיח בקוד
 # =============================
 def filter_by_budget(df, budget_min, budget_max):
@@ -207,6 +155,80 @@ def filter_by_budget(df, budget_min, budget_max):
         return False
     df_filtered = df[df.apply(_row_in_budget, axis=1)].copy()
     return df_filtered
+
+# =============================
+# Gemini – פרומפט נפרד להיברידי/חשמלי
+# =============================
+def fetch_models_10params(answers, verified_models):
+    if answers["engine"] in ["היברידי", "היברידי-בנזין", "היברידי-דיזל", "חשמלי"]:
+        if not verified_models:
+            return {}
+        payload = {
+            "contents": [{
+                "role": "user",
+                "parts": [{
+                    "text": f"""
+                    המשתמש נתן את ההעדפות הבאות:
+                    {answers}
+
+                    הנה רשימת רכבים שעברו סינון ראשוני ממאגר משרד התחבורה:
+                    {verified_models}
+
+                    ❌ מותר לבחור רק מתוך הרשימה.
+                    ❌ אסור להמציא טווחי מחיר או דגמים.
+                    ✅ אם אין דגמים מתאימים לתקציב – החזר JSON ריק: {{}}
+
+                    החזר אך ורק JSON תקני עם השדות:
+                    {{
+                      "Model Name": {{
+                         "price_range": "טווח מחירון ביד שנייה (₪)",
+                         "availability": "זמינות בישראל",
+                         "insurance_total": "עלות ביטוח חובה + צד ג' (₪)",
+                         "license_fee": "אגרת רישוי/טסט שנתית (₪)",
+                         "maintenance": "תחזוקה שנתית ממוצעת (₪)",
+                         "common_issues": "תקלות נפוצות",
+                         "fuel_consumption": "צריכת דלק אמיתית (ק״מ לליטר)",
+                         "depreciation": "ירידת ערך ממוצעת (%)",
+                         "safety": "דירוג בטיחות (כוכבים)",
+                         "parts_availability": "זמינות חלפים בישראל"
+                      }}
+                    }}
+                    """
+                }]
+            }]
+        }
+        answer = safe_gemini_call(payload)
+        result = parse_gemini_json(answer)
+
+        try:
+            df_check = pd.DataFrame(result).T
+            df_check = filter_by_budget(df_check, int(answers["budget_min"]), int(answers["budget_max"]))
+            if df_check.empty:
+                return {}
+            else:
+                return result
+        except Exception:
+            return {}
+    else:
+        payload = {
+            "contents": [{
+                "role": "user",
+                "parts": [{
+                    "text": f"""
+                    המשתמש נתן את ההעדפות הבאות:
+                    {answers}
+
+                    הנה רשימת רכבים שעברו סינון ראשוני ממאגר משרד התחבורה:
+                    {verified_models}
+
+                    ❌ אל תחזיר שום דגם שלא עומד בקריטריונים.
+                    ✅ החזר אך ורק JSON תקני.
+                    """
+                }]
+            }]
+        }
+        answer = safe_gemini_call(payload)
+        return parse_gemini_json(answer)
 
 # =============================
 # GPT מסכם ומדרג
@@ -308,7 +330,7 @@ if submitted:
         }
         df_params.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
 
-        # סינון קשיח לחשמל/היברידי
+        # סינון קשיח להיברידי/חשמלי
         if answers["engine"] in ["היברידי","היברידי-בנזין","היברידי-דיזל","חשמלי"]:
             df_params = filter_by_budget(df_params, int(answers["budget_min"]), int(answers["budget_max"]))
             if df_params.empty:
