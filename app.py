@@ -381,4 +381,32 @@ if submitted:
             # DEBUG לפני סינון
             st.write("✅ DEBUG: לפני סינון תקציב", df_params[["טווח מחירון"]])
 
-            df_params = filter_by_budget
+            df_params = filter_by_budget(
+                df_params,
+                int(answers["budget_min"]),
+                int(answers["budget_max"])
+            )
+
+            # DEBUG אחרי סינון
+            st.write("✅ DEBUG: אחרי סינון תקציב", df_params[["טווח מחירון"]])
+
+            if df_params.empty:
+                st.warning("❌ לא נמצאו רכבים היברידיים/חשמליים בתקציב שהוזן.")
+                st.stop()
+
+        st.session_state["df_params"] = df_params
+        st.subheader("🟩 טבלת 10 פרמטרים")
+        st.dataframe(df_params, use_container_width=True)
+    except Exception as e:
+        st.warning("⚠️ בעיה בנתוני JSON")
+        st.write(params_data)
+
+    summary = final_recommendation_with_gpt(answers, params_data)
+    st.session_state["summary"] = summary
+    st.subheader("🔎 ההמלצה הסופית שלך")
+    st.write(st.session_state["summary"])
+    save_log(answers, params_data, summary)
+
+if "df_params" in st.session_state:
+    csv2 = st.session_state["df_params"].to_csv(index=True, encoding="utf-8-sig")
+    st.download_button("⬇️ הורד טבלת 10 פרמטרים", csv2, "params_data.csv", "text/csv")
