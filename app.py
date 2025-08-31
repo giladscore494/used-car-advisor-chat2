@@ -377,4 +377,8 @@ if submitted:
         }
         df_params.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
 
-        if answers["engine"] in ["היברידי","ה
+        if answers["engine"] in ["היברידי","היברידי-בנזין","היברידי-דיזל","חשמלי"]:
+            # DEBUG לפני סינון
+            st.write("✅ DEBUG: לפני סינון תקציב", df_params[["טווח מחירון"]])
+
+            df_params = filter_by_budget
