@@ -146,16 +146,10 @@ def filter_with_mot(answers, mot_file="car_models_israel.csv"):
 # אימות מחיר משופר
 # =============================
 def parse_price_range(txt: str):
-    """
-    ממיר טקסט של טווח מחיר לטווח מספרי (min,max).
-    תומך ב: "80,000 – 150,000", "85 אלף – 140 אלף", "90k-120k", "100000".
-    """
     if not txt or not isinstance(txt, str):
         return None, None
-
     txt = txt.lower().replace(",", "").replace("₪", "").replace("ש״ח", "").replace("שח", "")
     txt = txt.replace("-", " ").replace("–", " ")
-
     nums = []
     for token in txt.split():
         if token.isdigit():
@@ -179,7 +173,6 @@ def parse_price_range(txt: str):
                     nums.append(val)
             except:
                 pass
-
     if len(nums) >= 2:
         return min(nums), max(nums)
     elif len(nums) == 1:
@@ -191,7 +184,8 @@ def filter_by_budget(df, budget_min, budget_max):
         pmin, pmax = parse_price_range(str(row.get("טווח מחירון", "")))
         if pmin is None or pmax is None:
             return False
-        return (pmax >= budget_min) and (pmin <= budget_max)
+        # ✅ תנאי חדש: מספיק שיש חפיפה בין טווחי התקציב לטווח המחיר
+        return not (pmax < budget_min or pmin > budget_max)
     return df[df.apply(_row_in_budget, axis=1)].copy()
 
 # =============================
@@ -215,40 +209,18 @@ def fetch_models_10params(answers, verified_models):
                     ❌ מותר לבחור רק מתוך הרשימה.
                     ❌ אסור להמציא טווחי מחיר או דגמים.
                     ✅ אם אין דגמים מתאימים לתקציב – החזר JSON ריק: {{}}
-
-                    החזר אך ורק JSON תקני עם השדות:
-                    {{
-                      "Model Name": {{
-                         "price_range": "טווח מחירון ביד שנייה (₪)",
-                         "availability": "זמינות בישראל",
-                         "insurance_total": "עלות ביטוח חובה + צד ג' (₪)",
-                         "license_fee": "אגרת רישוי/טסט שנתית (₪)",
-                         "maintenance": "תחזוקה שנתית ממוצעת (₪)",
-                         "common_issues": "תקלות נפוצות",
-                         "fuel_consumption": "צריכת דלק אמיתית (ק״מ לליטר)",
-                         "depreciation": "ירידת ערך ממוצעת (%)",
-                         "safety": "דירוג בטיחות (כוכבים)",
-                         "parts_availability": "זמינות חלפים בישראל"
-                      }}
-                    }}
                     """
                 }]
             }]
         }
         answer = safe_gemini_call(payload)
         result = parse_gemini_json(answer)
-
         try:
             df_check = pd.DataFrame(result).T
-            # DEBUG לפני סינון
-            st.write("✅ DEBUG: לפני סינון תקציב", df_check[["price_range"]] if "price_range" in df_check.columns else df_check)
-
+            st.write("✅ DEBUG: לפני סינון תקציב", df_check.get("price_range"))
             df_check.rename(columns={"price_range": "טווח מחירון"}, inplace=True)
             df_check = filter_by_budget(df_check, int(answers["budget_min"]), int(answers["budget_max"]))
-
-            # DEBUG אחרי סינון
-            st.write("✅ DEBUG: אחרי סינון תקציב", df_check[["טווח מחירון"]])
-
+            st.write("✅ DEBUG: אחרי סינון תקציב", df_check.get("טווח מחירון"))
             if df_check.empty:
                 return {}
             else:
@@ -378,16 +350,8 @@ if submitted:
         df_params.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
 
         if answers["engine"] in ["היברידי","היברידי-בנזין","היברידי-דיזל","חשמלי"]:
-            # DEBUG לפני סינון
             st.write("✅ DEBUG: לפני סינון תקציב", df_params[["טווח מחירון"]])
-
-            df_params = filter_by_budget(
-                df_params,
-                int(answers["budget_min"]),
-                int(answers["budget_max"])
-            )
-
-            # DEBUG אחרי סינון
+            df_params = filter_by_budget(df_params, int(answers["budget_min"]), int(answers["budget_max"]))
             st.write("✅ DEBUG: אחרי סינון תקציב", df_params[["טווח מחירון"]])
 
             if df_params.empty:
