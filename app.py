@@ -148,27 +148,38 @@ def filter_with_mot(answers, mot_file="car_models_israel.csv"):
 def parse_price_range(txt: str):
     """
     ממיר טקסט של טווח מחיר לטווח מספרי (min,max).
-    תומך גם ב-"85 אלף", בפסיקים ובמינוס/מקף.
+    תומך ב: "80,000 – 150,000", "85 אלף – 140 אלף", "90k-120k", "100000".
     """
     if not txt or not isinstance(txt, str):
         return None, None
-    txt = txt.replace(",", "").replace("₪", "").replace("-", " ").replace("–", " ")
-    parts = txt.split()
+
+    txt = txt.lower().replace(",", "").replace("₪", "").replace("ש״ח", "").replace("שח", "")
+    txt = txt.replace("-", " ").replace("–", " ")
+
     nums = []
-    for i, p in enumerate(parts):
-        if p.isdigit():
-            nums.append(int(p))
-        elif "אלף" in p:
+    for token in txt.split():
+        if token.isdigit():
+            nums.append(int(token))
+        elif "אלף" in token:
             try:
-                val = int(re.sub(r"\D", "", p)) * 1000
+                val = int(re.sub(r"\D", "", token)) * 1000
+                nums.append(val)
+            except:
+                pass
+        elif token.endswith("k"):
+            try:
+                val = int(re.sub(r"\D", "", token)) * 1000
                 nums.append(val)
             except:
                 pass
         else:
             try:
-                nums.append(int(re.sub(r"\D", "", p)))
+                val = int(re.sub(r"\D", "", token))
+                if val > 0:
+                    nums.append(val)
             except:
                 pass
+
     if len(nums) >= 2:
         return min(nums), max(nums)
     elif len(nums) == 1:
@@ -226,14 +237,24 @@ def fetch_models_10params(answers, verified_models):
         }
         answer = safe_gemini_call(payload)
         result = parse_gemini_json(answer)
+
         try:
             df_check = pd.DataFrame(result).T
+            # DEBUG לפני סינון
+            st.write("✅ DEBUG: לפני סינון תקציב", df_check[["price_range"]] if "price_range" in df_check.columns else df_check)
+
+            df_check.rename(columns={"price_range": "טווח מחירון"}, inplace=True)
             df_check = filter_by_budget(df_check, int(answers["budget_min"]), int(answers["budget_max"]))
+
+            # DEBUG אחרי סינון
+            st.write("✅ DEBUG: אחרי סינון תקציב", df_check[["טווח מחירון"]])
+
             if df_check.empty:
                 return {}
             else:
                 return result
-        except Exception:
+        except Exception as e:
+            st.write("❌ DEBUG Exception:", e)
             return {}
     else:
         payload = {
@@ -356,25 +377,4 @@ if submitted:
         }
         df_params.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
 
-        if answers["engine"] in ["היברידי","היברידי-בנזין","היברידי-דיזל","חשמלי"]:
-            df_params = filter_by_budget(df_params, int(answers["budget_min"]), int(answers["budget_max"]))
-            if df_params.empty:
-                st.warning("❌ לא נמצאו רכבים היברידיים/חשמליים בתקציב שהוזן.")
-                st.stop()
-
-        st.session_state["df_params"] = df_params
-        st.subheader("🟩 טבלת 10 פרמטרים")
-        st.dataframe(df_params, use_container_width=True)
-    except Exception as e:
-        st.warning("⚠️ בעיה בנתוני JSON")
-        st.write(params_data)
-
-    summary = final_recommendation_with_gpt(answers, params_data)
-    st.session_state["summary"] = summary
-    st.subheader("🔎 ההמלצה הסופית שלך")
-    st.write(st.session_state["summary"])
-    save_log(answers, params_data, summary)
-
-if "df_params" in st.session_state:
-    csv2 = st.session_state["df_params"].to_csv(index=True, encoding="utf-8-sig")
-    st.download_button("⬇️ הורד טבלת 10 פרמטרים", csv2, "params_data.csv", "text/csv")
+        if answers["engine"] in ["היברידי","ה
