@@ -184,70 +184,76 @@ def filter_by_budget(df, budget_min, budget_max):
         pmin, pmax = parse_price_range(str(row.get("טווח מחירון", "")))
         if pmin is None or pmax is None:
             return False
-        # ✅ תנאי חדש: מספיק שיש חפיפה בין טווחי התקציב לטווח המחיר
+        # ✅ חפיפה בין טווחי המחיר לטווח התקציב
         return not (pmax < budget_min or pmin > budget_max)
     return df[df.apply(_row_in_budget, axis=1)].copy()
 
 # =============================
-# Gemini – פרומפט נפרד להיברידי/חשמלי
+# Gemini – פרומפט + סינון
 # =============================
 def fetch_models_10params(answers, verified_models):
-    if answers["engine"] in ["היברידי", "היברידי-בנזין", "היברידי-דיזל", "חשמלי"]:
-        if not verified_models:
-            return {}
-        payload = {
-            "contents": [{
-                "role": "user",
-                "parts": [{
-                    "text": f"""
-                    המשתמש נתן את ההעדפות הבאות:
-                    {answers}
+    payload = {
+        "contents": [{
+            "role": "user",
+            "parts": [{
+                "text": f"""
+                המשתמש נתן את ההעדפות הבאות:
+                {answers}
 
-                    הנה רשימת רכבים שעברו סינון ראשוני ממאגר משרד התחבורה:
-                    {verified_models}
+                הנה רשימת רכבים שעברו סינון ראשוני ממאגר משרד התחבורה:
+                {verified_models}
 
-                    ❌ מותר לבחור רק מתוך הרשימה.
-                    ❌ אסור להמציא טווחי מחיר או דגמים.
-                    ✅ אם אין דגמים מתאימים לתקציב – החזר JSON ריק: {{}}
-                    """
-                }]
+                ❌ מותר לבחור רק מתוך הרשימה.
+                ❌ אסור להמציא טווחי מחיר או דגמים.
+                ✅ אם אין דגמים מתאימים לתקציב – החזר JSON ריק: {{}}
+
+                החזר אך ורק JSON תקני עם השדות:
+                {{
+                  "Model Name": {{
+                     "price_range": "טווח מחירון ביד שנייה (₪)",
+                     "availability": "זמינות בישראל",
+                     "insurance_total": "עלות ביטוח חובה + צד ג' (₪)",
+                     "license_fee": "אגרת רישוי/טסט שנתית (₪)",
+                     "maintenance": "תחזוקה שנתית ממוצעת (₪)",
+                     "common_issues": "תקלות נפוצות",
+                     "fuel_consumption": "צריכת דלק אמיתית (ק״מ לליטר)",
+                     "depreciation": "ירידת ערך ממוצעת (%)",
+                     "safety": "דירוג בטיחות (כוכבים)",
+                     "parts_availability": "זמינות חלפים בישראל"
+                  }}
+                }}
+                """
             }]
-        }
-        answer = safe_gemini_call(payload)
-        result = parse_gemini_json(answer)
-        try:
-            df_check = pd.DataFrame(result).T
-            st.write("✅ DEBUG: לפני סינון תקציב", df_check.get("price_range"))
+        }]
+    }
+    answer = safe_gemini_call(payload)
+    result = parse_gemini_json(answer)
+
+    st.write("✅ RAW Gemini Output:", result)  # DEBUG
+
+    if not result or len(result) == 0:
+        st.warning("⚠️ Gemini לא החזיר JSON תקני או שהרשימה ריקה.")
+        return {}
+
+    try:
+        df_check = pd.DataFrame(result).T
+        if "price_range" in df_check.columns:
             df_check.rename(columns={"price_range": "טווח מחירון"}, inplace=True)
-            df_check = filter_by_budget(df_check, int(answers["budget_min"]), int(answers["budget_max"]))
-            st.write("✅ DEBUG: אחרי סינון תקציב", df_check.get("טווח מחירון"))
-            if df_check.empty:
-                return {}
-            else:
-                return result
-        except Exception as e:
-            st.write("❌ DEBUG Exception:", e)
+        elif "טווח מחירון" not in df_check.columns:
+            st.warning("⚠️ חסר שדה טווח מחירון במידע מ-Gemini")
             return {}
-    else:
-        payload = {
-            "contents": [{
-                "role": "user",
-                "parts": [{
-                    "text": f"""
-                    המשתמש נתן את ההעדפות הבאות:
-                    {answers}
 
-                    הנה רשימת רכבים שעברו סינון ראשוני ממאגר משרד התחבורה:
-                    {verified_models}
+        st.write("✅ DEBUG: לפני סינון תקציב", df_check[["טווח מחירון"]])
+        df_check = filter_by_budget(df_check, int(answers["budget_min"]), int(answers["budget_max"]))
+        st.write("✅ DEBUG: אחרי סינון תקציב", df_check[["טווח מחירון"]])
 
-                    ❌ אל תחזיר שום דגם שלא עומד בקריטריונים.
-                    ✅ החזר אך ורק JSON תקני.
-                    """
-                }]
-            }]
-        }
-        answer = safe_gemini_call(payload)
-        return parse_gemini_json(answer)
+        if df_check.empty:
+            return {}
+        else:
+            return result
+    except Exception as e:
+        st.write("❌ DEBUG Exception:", e)
+        return {}
 
 # =============================
 # GPT מסכם ומדרג
@@ -358,19 +364,4 @@ if submitted:
                 st.warning("❌ לא נמצאו רכבים היברידיים/חשמליים בתקציב שהוזן.")
                 st.stop()
 
-        st.session_state["df_params"] = df_params
-        st.subheader("🟩 טבלת 10 פרמטרים")
-        st.dataframe(df_params, use_container_width=True)
-    except Exception as e:
-        st.warning("⚠️ בעיה בנתוני JSON")
-        st.write(params_data)
-
-    summary = final_recommendation_with_gpt(answers, params_data)
-    st.session_state["summary"] = summary
-    st.subheader("🔎 ההמלצה הסופית שלך")
-    st.write(st.session_state["summary"])
-    save_log(answers, params_data, summary)
-
-if "df_params" in st.session_state:
-    csv2 = st.session_state["df_params"].to_csv(index=True, encoding="utf-8-sig")
-    st.download_button("⬇️ הורד טבלת 10 פרמטרים", csv2, "params_data.csv", "text/csv")
+        st.session_state["
