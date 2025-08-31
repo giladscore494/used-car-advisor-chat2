@@ -184,7 +184,6 @@ def filter_by_budget(df, budget_min, budget_max):
         pmin, pmax = parse_price_range(str(row.get("טווח מחירון", "")))
         if pmin is None or pmax is None:
             return False
-        # ✅ חפיפה בין טווחי המחיר לטווח התקציב
         return not (pmax < budget_min or pmin > budget_max)
     return df[df.apply(_row_in_budget, axis=1)].copy()
 
@@ -229,7 +228,7 @@ def fetch_models_10params(answers, verified_models):
     answer = safe_gemini_call(payload)
     result = parse_gemini_json(answer)
 
-    st.write("✅ RAW Gemini Output:", result)  # DEBUG
+    st.write("✅ RAW Gemini Output:", result)
 
     if not result or len(result) == 0:
         st.warning("⚠️ Gemini לא החזיר JSON תקני או שהרשימה ריקה.")
@@ -364,4 +363,14 @@ if submitted:
                 st.warning("❌ לא נמצאו רכבים היברידיים/חשמליים בתקציב שהוזן.")
                 st.stop()
 
-        st.session_state["
+        st.session_state["df_params"] = df_params
+        st.subheader("🟩 טבלת 10 פרמטרים")
+        st.dataframe(df_params, use_container_width=True)
+    except Exception as e:
+        st.warning("⚠️ בעיה בנתוני JSON")
+        st.write(params_data)
+
+    summary = final_recommendation_with_gpt(answers, params_data)
+    st.session_state["summary"] = summary
+    st.subheader("🔎 ההמלצה הסופית שלך")
+    st.write(st.session_state["
