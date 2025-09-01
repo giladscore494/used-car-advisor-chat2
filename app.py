@@ -50,13 +50,8 @@ def parse_gemini_json(answer):
         return {}
 
 # =============================
-# עזר: סינון ראשוני מול מאגר
+# שלב 1 – סינון ראשוני מול מאגר משרד התחבורה
 # =============================
-def _safe_str(x):
-    if pd.isna(x):
-        return ""
-    return str(x).strip()
-
 def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
     if not os.path.exists(mot_file):
         st.error(f"❌ קובץ המאגר '{mot_file}' לא נמצא בתיקייה. ודא שהעלית אותו.")
@@ -75,18 +70,18 @@ def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
 
     mask_year = df["year"].between(year_min, year_max, inclusive="both")
     mask_cc = df["engine_cc"].between(cc_min, cc_max, inclusive="both")
-    mask_fuel = df["fuel"].astype(str) == answers["engine"]
-    mask_gear = (answers["gearbox"] == "לא משנה") | (
-        (answers["gearbox"] == "אוטומט") & (df["automatic"] == 1)
-    ) | (
-        (answers["gearbox"] == "ידני") & (df["automatic"] == 0)
-    )
+
+    mask_fuel = df["fuel"] == answers["engine"]
+    mask_gear = (answers["gearbox"] == "לא משנה") | \
+                ((answers["gearbox"] == "אוטומט") & (df["automatic"] == 1)) | \
+                ((answers["gearbox"] == "ידני") & (df["automatic"] == 0))
 
     df_filtered = df[mask_year & mask_cc & mask_fuel & mask_gear].copy()
+
     return df_filtered.to_dict(orient="records")
 
 # =============================
-# שלב 2 – Gemini העשרה מלאה
+# שלב 2 – Gemini בונה טבלת פרמטרים
 # =============================
 def fetch_models_10params(answers, verified_models):
     payload = {
@@ -94,36 +89,36 @@ def fetch_models_10params(answers, verified_models):
             "role": "user",
             "parts": [{
                 "text": f"""
-המשתמש נתן את ההעדפות הבאות:
-{answers}
+                המשתמש נתן את ההעדפות הבאות:
+                {answers}
 
-הנה רשימת רכבים שעברו סינון ראשוני ממאגר משרד התחבורה:
-{verified_models}
+                רשימת דגמים ממאגר משרד התחבורה:
+                {verified_models}
 
-כעת בצע העשרה מלאה לכל רכב:
-- אסור להוסיף דגמים חדשים
-- חובה להתייחס לשוק הרכב בישראל בלבד
-- חובה להחזיר טווח מחירים שתואם אך ורק לתקציב: {answers['budget_min']}–{answers['budget_max']} ₪
-- אם דגם לא עומד בתקציב – אל תחזיר אותו כלל
-- אם אין רכבים מתאימים – החזר JSON ריק ({{}})
+                עבור כל דגם החזר JSON בפורמט:
+                {{
+                  "Model (year, engine, fuel)": {{
+                     "price_range": "טווח מחירון ביד שנייה בישראל (₪)",
+                     "availability": "זמינות בישראל",
+                     "insurance_total": "עלות ביטוח חובה + צד ג' (₪)",
+                     "license_fee": "אגרת רישוי/טסט שנתית (₪)",
+                     "maintenance": "תחזוקה שנתית ממוצעת (₪)",
+                     "common_issues": "תקלות נפוצות",
+                     "fuel_consumption": "צריכת דלק אמיתית (ק״מ לליטר)",
+                     "depreciation": "ירידת ערך ממוצעת (%)",
+                     "safety": "דירוג בטיחות (כוכבים)",
+                     "parts_availability": "זמינות חלפים בישראל",
+                     "turbo": 0/1,
+                     "out_of_budget": false
+                  }}
+                }}
 
-פורמט פלט נדרש – JSON בלבד:
-{{
-  "Model Name": {{
-     "price_range": "טווח מחירון ביד שנייה (₪)",
-     "availability": "זמינות בישראל",
-     "insurance_total": "עלות ביטוח חובה + צד ג' (₪)",
-     "license_fee": "אגרת רישוי/טסט שנתית (₪)",
-     "maintenance": "תחזוקה שנתית ממוצעת (₪)",
-     "common_issues": "תקלות נפוצות",
-     "fuel_consumption": "צריכת דלק אמיתית (ק״מ לליטר)",
-     "depreciation": "ירידת ערך ממוצעת (%)",
-     "safety": "דירוג בטיחות (כוכבים)",
-     "parts_availability": "זמינות חלפים בישראל",
-     "turbo": 0 או 1
-  }}
-}}
-"""
+                חוקים:
+                - חובה להחזיר טווח מחירון אמיתי מהשוק הישראלי בלבד.
+                - אם טווח המחיר מחוץ לתקציב ({answers['budget_min']}–{answers['budget_max']} ₪) → החזר "out_of_budget": true.
+                - אם בטווח → "out_of_budget": false.
+                - אסור להמציא מחירים. אם לא ידוע → "לא ידוע".
+                """
             }]
         }]
     }
@@ -135,18 +130,19 @@ def fetch_models_10params(answers, verified_models):
 # =============================
 def final_recommendation_with_gpt(answers, params_data):
     text = f"""
-תשובות המשתמש:
-{answers}
+    תשובות המשתמש:
+    {answers}
 
-נתוני 10 פרמטרים:
-{params_data}
+    נתוני פרמטרים:
+    {params_data}
 
-צור סיכום בעברית:
-- בחר את 5 הדגמים הטובים ביותר בלבד
-- פרט יתרונות וחסרונות
-- התייחס לעלות ביטוח, תחזוקה, ירידת ערך וצריכת דלק
-- הסבר למה הם הכי מתאימים למשתמש
-"""
+    צור סיכום בעברית:
+    - בחר עד 5 דגמים בלבד
+    - אל תכלול דגמים עם "out_of_budget": true
+    - פרט יתרונות וחסרונות
+    - התייחס לעלות ביטוח, תחזוקה, ירידת ערך, אמינות ושימוש עיקרי
+    - הסבר למה הדגמים הכי מתאימים
+    """
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": text}],
@@ -155,29 +151,22 @@ def final_recommendation_with_gpt(answers, params_data):
     return response.choices[0].message.content
 
 # =============================
-# Cache – שמירה
+# פונקציית לוג
 # =============================
-def save_cache(enriched_data, filename="cache.csv"):
-    if not isinstance(enriched_data, dict) or not enriched_data:
-        print("⚠️ enriched_data לא בפורמט dict – לא שומר לקובץ")
-        return
-
-    try:
-        df_new = pd.DataFrame.from_dict(enriched_data, orient="index")
-    except Exception as e:
-        print(f"⚠️ שגיאה בשמירה ל־DataFrame: {e}")
-        return
-
+def save_log(answers, params_data, summary, filename="car_advisor_logs.csv"):
+    record = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "answers": json.dumps(answers, ensure_ascii=False),
+        "params_data": json.dumps(params_data, ensure_ascii=False),
+        "summary": summary,
+    }
     if os.path.exists(filename):
-        try:
-            df_old = pd.read_csv(filename)
-            df_final = pd.concat([df_old, df_new], axis=0)
-        except:
-            df_final = df_new
+        existing = pd.read_csv(filename)
+        new_df = pd.DataFrame([record])
+        final = pd.concat([existing, new_df], ignore_index=True)
     else:
-        df_final = df_new
-
-    df_final.to_csv(filename, index=True, encoding="utf-8-sig")
+        final = pd.DataFrame([record])
+    final.to_csv(filename, index=False, encoding="utf-8-sig")
 
 # =============================
 # Streamlit UI
@@ -189,13 +178,14 @@ with st.form("car_form"):
     answers = {}
     answers["budget_min"] = int(st.text_input("תקציב מינימלי (₪)", "5000"))
     answers["budget_max"] = int(st.text_input("תקציב מקסימלי (₪)", "20000"))
+
     answers["engine"] = st.radio("מנוע מועדף:", ["בנזין", "דיזל", "היברידי-בנזין", "היברידי-דיזל", "חשמל"])
     answers["engine_cc_min"] = int(st.text_input("נפח מנוע מינימלי (סמ״ק):", "1200"))
     answers["engine_cc_max"] = int(st.text_input("נפח מנוע מקסימלי (סמ״ק):", "2000"))
     answers["year_min"] = st.text_input("שנת ייצור מינימלית:", "2000")
     answers["year_max"] = st.text_input("שנת ייצור מקסימלית:", "2020")
 
-    answers["car_type"] = st.selectbox("סוג רכב:", ["סדאן", "האצ'בק", "SUV", "מיני", "סופר מיני", "סטיישן", "טנדר", "משפחתי"])
+    answers["car_type"] = st.selectbox("סוג רכב:", ["סדאן", "האצ'בק", "SUV", "מיני", "סטיישן", "טנדר", "משפחתי"])
     answers["gearbox"] = st.radio("גיר:", ["לא משנה", "אוטומט", "ידני"])
     answers["turbo"] = st.radio("מנוע טורבו:", ["לא משנה", "כן", "לא"])
     answers["usage"] = st.radio("שימוש עיקרי:", ["עירוני", "בין-עירוני", "מעורב"])
@@ -219,13 +209,12 @@ if submitted:
     with st.spinner("📊 סינון ראשוני מול מאגר משרד התחבורה..."):
         verified_models = filter_with_mot(answers)
 
-    with st.spinner("🌐 Gemini מעשיר נתונים..."):
-        enriched_data = fetch_models_10params(answers, verified_models)
-
-    save_cache(enriched_data)
+    with st.spinner("🌐 Gemini בונה טבלת פרמטרים..."):
+        params_data = fetch_models_10params(answers, verified_models)
 
     try:
-        df_params = pd.DataFrame.from_dict(enriched_data, orient="index")
+        df_params = pd.DataFrame(params_data).T
+
         COLUMN_TRANSLATIONS = {
             "price_range": "טווח מחירון",
             "availability": "זמינות בישראל",
@@ -233,52 +222,49 @@ if submitted:
             "license_fee": "אגרת רישוי",
             "maintenance": "תחזוקה שנתית",
             "common_issues": "תקלות נפוצות",
-            "fuel_consumption": "צריכת דלק (ק״מ לליטר)",
-            "depreciation": "ירידת ערך (%)",
-            "safety": "דירוג בטיחות (כוכבים)",
-            "parts_availability": "זמינות חלפים",
-            "turbo": "טורבו"
+            "fuel_consumption": "צריכת דלק",
+            "depreciation": "ירידת ערך",
+            "safety": "בטיחות",
+            "parts_availability": "חלפים בישראל",
+            "turbo": "טורבו",
+            "out_of_budget": "מחוץ לתקציב"
         }
         df_params.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
 
         st.session_state["df_params"] = df_params
-        st.subheader("🟩 טבלת 10 פרמטרים")
+
+        st.subheader("🟩 טבלת פרמטרים")
         st.dataframe(df_params, use_container_width=True)
 
     except Exception as e:
         st.warning("⚠️ בעיה בנתוני JSON")
-        st.write(enriched_data)
+        st.write(params_data)
 
     with st.spinner("⚡ GPT מסכם ומדרג..."):
-        summary = final_recommendation_with_gpt(answers, enriched_data)
+        summary = final_recommendation_with_gpt(answers, params_data)
         st.session_state["summary"] = summary
 
     st.subheader("🔎 ההמלצה הסופית שלך")
     st.write(st.session_state["summary"])
 
-    # שמירה להיסטוריה
-    record = {
-        "timestamp": datetime.datetime.now().isoformat(),
-        "answers": json.dumps(answers, ensure_ascii=False),
-        "params_data": json.dumps(enriched_data, ensure_ascii=False),
-        "summary": st.session_state["summary"],
-    }
-    log_file = "car_advisor_logs.csv"
-    if os.path.exists(log_file):
-        existing = pd.read_csv(log_file)
-        new_df = pd.DataFrame([record])
-        final = pd.concat([existing, new_df], ignore_index=True)
-    else:
-        final = pd.DataFrame([record])
-    final.to_csv(log_file, index=False, encoding="utf-8-sig")
+    save_log(answers, params_data, st.session_state["summary"])
 
 # =============================
-# הורדת טבלה
+# הורדת טבלה מה-session
 # =============================
 if "df_params" in st.session_state:
     csv2 = st.session_state["df_params"].to_csv(index=True, encoding="utf-8-sig")
-    st.download_button("⬇️ הורד טבלת 10 פרמטרים", csv2, "params_data.csv", "text/csv")
+    st.download_button("⬇️ הורד טבלת פרמטרים", csv2, "params_data.csv", "text/csv")
 
-if os.path.exists("car_advisor_logs.csv"):
-    with open("car_advisor_logs.csv", "rb") as f:
-        st.download_button("⬇️ הורד את כל היסטוריית השאלונים", f, file_name="car_advisor_logs.csv", mime="text/csv")
+# =============================
+# כפתור הורדה של כל ההיסטוריה
+# =============================
+log_file = "car_advisor_logs.csv"
+if os.path.exists(log_file):
+    with open(log_file, "rb") as f:
+        st.download_button(
+            "⬇️ הורד את כל היסטוריית השאלונים",
+            f,
+            file_name="car_advisor_logs.csv",
+            mime="text/csv"
+        )
