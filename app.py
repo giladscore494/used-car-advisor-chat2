@@ -50,8 +50,13 @@ def parse_gemini_json(answer):
         return {}
 
 # =============================
-# סינון ראשוני מול מאגר משרד התחבורה
+# עזר: סינון ראשוני מול מאגר
 # =============================
+def _safe_str(x):
+    if pd.isna(x):
+        return ""
+    return str(x).strip()
+
 def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
     if not os.path.exists(mot_file):
         st.error(f"❌ קובץ המאגר '{mot_file}' לא נמצא בתיקייה. ודא שהעלית אותו.")
@@ -70,12 +75,18 @@ def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
 
     mask_year = df["year"].between(year_min, year_max, inclusive="both")
     mask_cc = df["engine_cc"].between(cc_min, cc_max, inclusive="both")
+    mask_fuel = df["fuel"].astype(str) == answers["engine"]
+    mask_gear = (answers["gearbox"] == "לא משנה") | (
+        (answers["gearbox"] == "אוטומט") & (df["automatic"] == 1)
+    ) | (
+        (answers["gearbox"] == "ידני") & (df["automatic"] == 0)
+    )
 
-    df_filtered = df[mask_year & mask_cc].copy()
+    df_filtered = df[mask_year & mask_cc & mask_fuel & mask_gear].copy()
     return df_filtered.to_dict(orient="records")
 
 # =============================
-# Gemini בונה טבלת 10 פרמטרים
+# שלב 2 – Gemini העשרה מלאה
 # =============================
 def fetch_models_10params(answers, verified_models):
     payload = {
@@ -89,14 +100,14 @@ def fetch_models_10params(answers, verified_models):
 הנה רשימת רכבים שעברו סינון ראשוני ממאגר משרד התחבורה:
 {verified_models}
 
-כעת בצע סינון משלים והחזר פרמטרים יבשים בלבד.
+כעת בצע העשרה מלאה לכל רכב:
+- אסור להוסיף דגמים חדשים
+- חובה להתייחס לשוק הרכב בישראל בלבד
+- חובה להחזיר טווח מחירים שתואם אך ורק לתקציב: {answers['budget_min']}–{answers['budget_max']} ₪
+- אם דגם לא עומד בתקציב – אל תחזיר אותו כלל
+- אם אין רכבים מתאימים – החזר JSON ריק ({{}})
 
-⚠️ תנאי קריטי:
-החזר אך ורק דגמים שטווח המחירון שלהם נמצא בין {answers['budget_min']} ל-{answers['budget_max']} ₪.
-אם טווח המחירים חורג ולו במעט – אל תחזיר את הדגם הזה.
-אם אין רכבים מתאימים – החזר JSON ריק ({{}}).
-
-פורמט פלט – JSON תקני בלבד עם השדות:
+פורמט פלט נדרש – JSON בלבד:
 {{
   "Model Name": {{
      "price_range": "טווח מחירון ביד שנייה (₪)",
@@ -112,7 +123,7 @@ def fetch_models_10params(answers, verified_models):
      "turbo": 0 או 1
   }}
 }}
-                """
+"""
             }]
         }]
     }
@@ -120,22 +131,22 @@ def fetch_models_10params(answers, verified_models):
     return parse_gemini_json(answer)
 
 # =============================
-# GPT מסכם ומדרג
+# שלב 3 – GPT מסכם ומדרג
 # =============================
 def final_recommendation_with_gpt(answers, params_data):
     text = f"""
-    תשובות המשתמש:
-    {answers}
+תשובות המשתמש:
+{answers}
 
-    נתוני 10 פרמטרים:
-    {params_data}
+נתוני 10 פרמטרים:
+{params_data}
 
-    צור סיכום בעברית:
-    - בחר את 5 הדגמים הטובים ביותר בלבד
-    - פרט יתרונות וחסרונות
-    - התייחס לעלות ביטוח, תחזוקה, ירידת ערך וצריכת דלק
-    - הסבר למה הם הכי מתאימים למשתמש
-    """
+צור סיכום בעברית:
+- בחר את 5 הדגמים הטובים ביותר בלבד
+- פרט יתרונות וחסרונות
+- התייחס לעלות ביטוח, תחזוקה, ירידת ערך וצריכת דלק
+- הסבר למה הם הכי מתאימים למשתמש
+"""
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": text}],
@@ -144,7 +155,7 @@ def final_recommendation_with_gpt(answers, params_data):
     return response.choices[0].message.content
 
 # =============================
-# שמירת קאש
+# Cache – שמירה
 # =============================
 def save_cache(enriched_data, filename="cache.csv"):
     if not isinstance(enriched_data, dict) or not enriched_data:
@@ -183,4 +194,91 @@ with st.form("car_form"):
     answers["engine_cc_max"] = int(st.text_input("נפח מנוע מקסימלי (סמ״ק):", "2000"))
     answers["year_min"] = st.text_input("שנת ייצור מינימלית:", "2000")
     answers["year_max"] = st.text_input("שנת ייצור מקסימלית:", "2020")
-    answers["car_type"] = st.selectbox("סוג רכב:", ["סדאן", "האצ'
+
+    answers["car_type"] = st.selectbox("סוג רכב:", ["סדאן", "האצ'בק", "SUV", "מיני", "סופר מיני", "סטיישן", "טנדר", "משפחתי"])
+    answers["gearbox"] = st.radio("גיר:", ["לא משנה", "אוטומט", "ידני"])
+    answers["turbo"] = st.radio("מנוע טורבו:", ["לא משנה", "כן", "לא"])
+    answers["usage"] = st.radio("שימוש עיקרי:", ["עירוני", "בין-עירוני", "מעורב"])
+    answers["driver_age"] = st.selectbox("גיל הנהג הראשי:", ["עד 21", "21–24", "25–34", "35+"])
+    answers["license_years"] = st.selectbox("ותק רישיון נהיגה:", ["פחות משנה", "1–3 שנים", "3–5 שנים", "מעל 5 שנים"])
+    answers["insurance_history"] = st.selectbox("עבר ביטוחי/תעבורתי:", ["ללא", "תאונה אחת", "מספר תביעות"])
+    answers["annual_km"] = st.selectbox("נסועה שנתית (ק״מ):", ["עד 10,000", "10,000–20,000", "20,000–30,000", "מעל 30,000"])
+    answers["passengers"] = st.selectbox("מספר נוסעים עיקרי:", ["לרוב לבד", "2 אנשים", "3–5 נוסעים", "מעל 5"])
+    answers["maintenance_budget"] = st.selectbox("יכולת תחזוקה:", ["מתחת 3,000 ₪", "3,000–5,000 ₪", "מעל 5,000 ₪"])
+    answers["reliability_vs_comfort"] = st.selectbox("מה חשוב יותר?", ["אמינות מעל הכול", "איזון אמינות ונוחות", "נוחות/ביצועים"])
+    answers["eco_pref"] = st.selectbox("שיקולי איכות סביבה:", ["חשוב רכב ירוק/חסכוני", "לא משנה"])
+    answers["resale_value"] = st.selectbox("שמירת ערך עתידית:", ["חשוב לשמור על ערך", "פחות חשוב"])
+    answers["extra"] = st.text_area("משהו נוסף שתרצה לציין?")
+
+    submitted = st.form_submit_button("שלח וקבל המלצה")
+
+# =============================
+# טיפול אחרי שליחה
+# =============================
+if submitted:
+    with st.spinner("📊 סינון ראשוני מול מאגר משרד התחבורה..."):
+        verified_models = filter_with_mot(answers)
+
+    with st.spinner("🌐 Gemini מעשיר נתונים..."):
+        enriched_data = fetch_models_10params(answers, verified_models)
+
+    save_cache(enriched_data)
+
+    try:
+        df_params = pd.DataFrame.from_dict(enriched_data, orient="index")
+        COLUMN_TRANSLATIONS = {
+            "price_range": "טווח מחירון",
+            "availability": "זמינות בישראל",
+            "insurance_total": "ביטוח חובה + צד ג׳",
+            "license_fee": "אגרת רישוי",
+            "maintenance": "תחזוקה שנתית",
+            "common_issues": "תקלות נפוצות",
+            "fuel_consumption": "צריכת דלק (ק״מ לליטר)",
+            "depreciation": "ירידת ערך (%)",
+            "safety": "דירוג בטיחות (כוכבים)",
+            "parts_availability": "זמינות חלפים",
+            "turbo": "טורבו"
+        }
+        df_params.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
+
+        st.session_state["df_params"] = df_params
+        st.subheader("🟩 טבלת 10 פרמטרים")
+        st.dataframe(df_params, use_container_width=True)
+
+    except Exception as e:
+        st.warning("⚠️ בעיה בנתוני JSON")
+        st.write(enriched_data)
+
+    with st.spinner("⚡ GPT מסכם ומדרג..."):
+        summary = final_recommendation_with_gpt(answers, enriched_data)
+        st.session_state["summary"] = summary
+
+    st.subheader("🔎 ההמלצה הסופית שלך")
+    st.write(st.session_state["summary"])
+
+    # שמירה להיסטוריה
+    record = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "answers": json.dumps(answers, ensure_ascii=False),
+        "params_data": json.dumps(enriched_data, ensure_ascii=False),
+        "summary": st.session_state["summary"],
+    }
+    log_file = "car_advisor_logs.csv"
+    if os.path.exists(log_file):
+        existing = pd.read_csv(log_file)
+        new_df = pd.DataFrame([record])
+        final = pd.concat([existing, new_df], ignore_index=True)
+    else:
+        final = pd.DataFrame([record])
+    final.to_csv(log_file, index=False, encoding="utf-8-sig")
+
+# =============================
+# הורדת טבלה
+# =============================
+if "df_params" in st.session_state:
+    csv2 = st.session_state["df_params"].to_csv(index=True, encoding="utf-8-sig")
+    st.download_button("⬇️ הורד טבלת 10 פרמטרים", csv2, "params_data.csv", "text/csv")
+
+if os.path.exists("car_advisor_logs.csv"):
+    with open("car_advisor_logs.csv", "rb") as f:
+        st.download_button("⬇️ הורד את כל היסטוריית השאלונים", f, file_name="car_advisor_logs.csv", mime="text/csv")
