@@ -47,93 +47,19 @@ def parse_gemini_json(answer):
     try:
         return json.loads(cleaned)
     except Exception:
-        return []
-
-# =============================
-# עזר: זיהוי סוגי דלק/הנעה כפי שמופיעים במאגר
-# =============================
-def _safe_str(x):
-    if pd.isna(x):
-        return ""
-    return str(x).strip()
-
-def _is_hybrid(fuel_text: str) -> bool:
-    """
-    היברידי = כל ערך שמכיל חשמל יחד עם דלק אחר (בנזין/חשמל, דיזל/חשמל),
-    או ערכים שמכילים מונחי היבריד: 'היברידי', 'נטען', 'Plug-in', 'PHEV'.
-    לא כולל 'חשמל' טהור בלבד.
-    """
-    s = _safe_str(fuel_text)
-    if not s:
-        return False
-    s_low = s.lower()
-    heb = "חשמל" in s and s.strip() != "חשמל"
-    keywords = any(k in s_low for k in ["היברידי", "נטען", "plug-in", "plug in", "phev"])
-    slash_mix = ("/" in s and "חשמל" in s and s.strip() != "חשמל")
-    return heb or keywords or slash_mix
-
-def _is_electric(fuel_text: str) -> bool:
-    """
-    חשמלי מלא. מזהה 'חשמל' / 'חשמלי' / מונחים נפוצים ל-BEV.
-    """
-    s = _safe_str(fuel_text)
-    if not s:
-        return False
-    s_low = s.lower()
-    # 'חשמל' לבד או גרסאות נפוצות
-    return s.strip() in ["חשמל", "חשמלי"] or any(k in s_low for k in ["bev", "battery electric"])
-
-def _match_conventional(fuel_text: str, wanted: str) -> bool:
-    """
-    התאמה לבנזין/דיזל שאינם היברידיים (לא מכילים חשמל או מילות היבריד).
-    """
-    s = _safe_str(fuel_text)
-    if not s:
-        return False
-    if _is_hybrid(s) or _is_electric(s):
-        return False
-    # התאמה גמישה לערך העיקרי (בנזין/דיזל), כולל וריאציות (לדוגמה 'בנזין 95', 'דיזל טורבו')
-    return wanted in s
-
-def _engine_mask(df: pd.DataFrame, wanted_engine: str) -> pd.Series:
-    """
-    יוצר מסכה לוגית לעמודת fuel בהתאם לבחירת המשתמש:
-    'בנזין' / 'דיזל' / 'היברידי' / 'חשמלי'
-    """
-    fuel_series = df["fuel"].astype(str).fillna("")
-    if wanted_engine == "היברידי":
-        return fuel_series.map(_is_hybrid)
-    elif wanted_engine == "חשמלי":
-        return fuel_series.map(_is_electric)
-    elif wanted_engine in ["בנזין", "דיזל"]:
-        return fuel_series.map(lambda s: _match_conventional(s, wanted_engine))
-    else:
-        # ברירת מחדל – לא מסנן לפי דלק
-        return pd.Series([True] * len(df), index=df.index)
-
-def _gearbox_mask(df: pd.DataFrame, wanted: str) -> pd.Series:
-    """
-    automatic: 1 = אוטומט, 0 = ידני.
-    'לא משנה' -> הכל True.
-    """
-    if wanted == "לא משנה":
-        return pd.Series([True] * len(df), index=df.index)
-    elif wanted == "אוטומט":
-        return df["automatic"].astype(int) == 1
-    else:  # "ידני"
-        return df["automatic"].astype(int) == 0
+        return {}
 
 # =============================
 # שלב 1 – סינון ראשוני מול מאגר משרד התחבורה
 # =============================
-def filter_with_mot(answers, mot_file="car_models_israel.csv"):
+def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
     if not os.path.exists(mot_file):
         st.error(f"❌ קובץ המאגר '{mot_file}' לא נמצא בתיקייה. ודא שהעלית אותו.")
         return []
 
     df = pd.read_csv(mot_file)
 
-    # המרות בטוחות לסוגים מספריים
+    # המרות בטוחות
     for col in ["year", "engine_cc"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -146,21 +72,25 @@ def filter_with_mot(answers, mot_file="car_models_israel.csv"):
     mask_year = df["year"].between(year_min, year_max, inclusive="both")
     mask_cc = df["engine_cc"].between(cc_min, cc_max, inclusive="both")
 
-    # מסכת דלק/הנעה – כולל טיפול נכון בהיברידי
-    mask_fuel = _engine_mask(df, answers["engine"])
+    # סינון לפי סוג דלק
+    mask_fuel = df["fuel_normalized"] == answers["engine"]
 
-    # מסכת תיבת הילוכים
-    mask_gear = _gearbox_mask(df, answers["gearbox"])
+    # סינון לפי גיר
+    if answers["gearbox"] == "אוטומט":
+        mask_gear = df["automatic"].astype(int) == 1
+    elif answers["gearbox"] == "ידני":
+        mask_gear = df["automatic"].astype(int) == 0
+    else:
+        mask_gear = pd.Series([True] * len(df), index=df.index)
 
     df_filtered = df[mask_year & mask_cc & mask_fuel & mask_gear].copy()
 
-    # החזרה כמילונים
     return df_filtered.to_dict(orient="records")
 
 # =============================
-# שלב 2 – Gemini בונה טבלת 10 פרמטרים (סינון משלים)
+# שלב 2 – Gemini מוסיף נתונים יבשים
 # =============================
-def fetch_models_10params(answers, verified_models):
+def fetch_models_from_gemini(answers, verified_models):
     payload = {
         "contents": [{
             "role": "user",
@@ -169,39 +99,26 @@ def fetch_models_10params(answers, verified_models):
                 המשתמש נתן את ההעדפות הבאות:
                 {answers}
 
-                הנה רשימת רכבים שעברו סינון ראשוני ממאגר משרד התחבורה:
+                הנה רשימת רכבים שעברו סינון ראשוני:
                 {verified_models}
 
-                כעת בצע סינון משלים לפי כל ההעדפות:
-                - סוג רכב: {answers['car_type']}
-                - מנוע טורבו: {answers['turbo']}
-                - שימוש עיקרי: {answers['usage']}
-                - גיל נהג: {answers['driver_age']}
-                - ותק רישיון: {answers['license_years']}
-                - עבר ביטוחי: {answers['insurance_history']}
-                - תקציב תחזוקה: {answers['maintenance_budget']}
-                - אמינות מול נוחות: {answers['reliability_vs_comfort']}
-                - שמירת ערך: {answers['resale_value']}
-                - שיקולי איכות סביבה: {answers['eco_pref']}
-                - תקציב כולל: {answers['budget_min']}–{answers['budget_max']} ₪
-
-                חשוב:
-                ❌ אל תחזיר שום דגם שלא עומד בכל הקריטריונים.
-                ✅ החזר אך ורק JSON תקני עם השדות:
+                עבור כל רכב החזר אך ורק JSON עם השדות הבאים, נתונים לישראל בלבד:
                 {{
-                  "Model Name": {{
-                     "price_range": "טווח מחירון ביד שנייה (₪)",
-                     "availability": "זמינות בישראל",
+                  "Model (year, engine, fuel)": {{
+                     "price_range": "טווח מחירון ממוצע ביד שנייה (₪)",
                      "insurance_total": "עלות ביטוח חובה + צד ג' (₪)",
-                     "license_fee": "אגרת רישוי/טסט שנתית (₪)",
                      "maintenance": "תחזוקה שנתית ממוצעת (₪)",
                      "common_issues": "תקלות נפוצות",
-                     "fuel_consumption": "צריכת דלק אמיתית (ק״מ לליטר)",
                      "depreciation": "ירידת ערך ממוצעת (%)",
                      "safety": "דירוג בטיחות (כוכבים)",
-                     "parts_availability": "זמינות חלפים בישראל"
+                     "parts_availability": "זמינות חלפים בישראל",
+                     "turbo": 0/1
                   }}
                 }}
+
+                ❌ אל תוסיף דגמים חדשים.
+                ❌ אל תסנן לפי שאלון.
+                ✅ החזר אך ורק נתונים יבשים מהמקורות.
                 """
             }]
         }]
@@ -210,21 +127,21 @@ def fetch_models_10params(answers, verified_models):
     return parse_gemini_json(answer)
 
 # =============================
-# שלב 3 – GPT מסכם ומדרג
+# שלב 3 – GPT מסנן ומדרג
 # =============================
-def final_recommendation_with_gpt(answers, params_data):
+def final_recommendation_with_gpt(answers, enriched_data):
     text = f"""
     תשובות המשתמש:
     {answers}
 
-    נתוני 10 פרמטרים:
-    {params_data}
+    נתוני הדגמים (מגימניי):
+    {enriched_data}
 
     צור סיכום בעברית:
-    - בחר את 5 הדגמים הטובים ביותר בלבד
+    - בחר עד 5 דגמים בלבד
+    - סנן לפי תקציב מחירון, תחזוקה, ירידת ערך, שימוש עיקרי, אמינות/נוחות, שמירת ערך, ביטוח, איכות סביבה
     - פרט יתרונות וחסרונות
-    - התייחס לעלות ביטוח, תחזוקה, ירידת ערך וצריכת דלק
-    - הסבר למה הם הכי מתאימים למשתמש
+    - צור טבלת 10 פרמטרים סופית
     """
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -234,21 +151,18 @@ def final_recommendation_with_gpt(answers, params_data):
     return response.choices[0].message.content
 
 # =============================
-# פונקציית לוג
+# שלב 4 – Cache (שמירה חודשית)
 # =============================
-def save_log(answers, params_data, summary, filename="car_advisor_logs.csv"):
-    record = {
-        "timestamp": datetime.datetime.now().isoformat(),
-        "answers": json.dumps(answers, ensure_ascii=False),
-        "params_data": json.dumps(params_data, ensure_ascii=False),
-        "summary": summary,
-    }
+def save_cache(enriched_data, filename="car_data_cache.csv"):
+    df_new = pd.DataFrame.from_dict(enriched_data, orient="index")
+    df_new["update_date"] = datetime.date.today().isoformat()
+
     if os.path.exists(filename):
-        existing = pd.read_csv(filename)
-        new_df = pd.DataFrame([record])
-        final = pd.concat([existing, new_df], ignore_index=True)
+        df_old = pd.read_csv(filename)
+        final = pd.concat([df_old, df_new], ignore_index=True)
     else:
-        final = pd.DataFrame([record])
+        final = df_new
+
     final.to_csv(filename, index=False, encoding="utf-8-sig")
 
 # =============================
@@ -261,168 +175,39 @@ with st.form("car_form"):
     answers = {}
     answers["budget_min"] = int(st.text_input("תקציב מינימלי (₪)", "5000"))
     answers["budget_max"] = int(st.text_input("תקציב מקסימלי (₪)", "20000"))
-    st.caption("התקציב מגדיר כמה כסף מוכן להשקיע – מונע הצעות יקרות מדי או זולות מדי.")
-
-    answers["engine"] = st.radio(
-        "מנוע מועדף:",
-        ["בנזין", "דיזל", "היברידי", "חשמלי"],
-        help="במאגר הממשלתי 'היברידי' מופיע לרוב כ'בנזין/חשמל' או 'דיזל/חשמל'. הסינון כאן תומך בזה אוטומטית."
-    )
-
+    answers["engine"] = st.radio("מנוע מועדף:", ["בנזין", "דיזל", "היברידי-בנזין", "היברידי-דיזל", "חשמל"])
     answers["engine_cc_min"] = int(st.text_input("נפח מנוע מינימלי (סמ״ק):", "1200"))
     answers["engine_cc_max"] = int(st.text_input("נפח מנוע מקסימלי (סמ״ק):", "2000"))
-    st.caption("נפח מנוע קובע את עוצמת המנוע ואת צריכת הדלק – גדול יותר = חזק יותר אבל יקר יותר בתחזוקה ובביטוח.")
-
     answers["year_min"] = st.text_input("שנת ייצור מינימלית:", "2000")
     answers["year_max"] = st.text_input("שנת ייצור מקסימלית:", "2020")
-    st.caption("שנת הייצור קובעת את גיל הרכב – משפיע על אמינות, ירידת ערך ועלויות ביטוח.")
-
-    answers["car_type"] = st.selectbox(
-        "סוג רכב:",
-        ["סדאן", "האצ'בק", "SUV", "מיני", "סופר מיני", "סטיישן", "טנדר", "משפחתי"],
-        help="סוג הרכב קובע את הגודל, מרחב הפנים ונוחות הנסיעה."
-    )
-
-    answers["gearbox"] = st.radio(
-        "גיר:",
-        ["לא משנה", "אוטומט", "ידני"],
-        help="אוטומט = 1, ידני = 0 בעמודת המאגר; הסינון מותאם לכך."
-    )
-
-    answers["turbo"] = st.radio(
-        "מנוע טורבו:",
-        ["לא משנה", "כן", "לא"],
-        help="מנוע עם טורבו חזק יותר, אבל דורש תחזוקה יקרה יותר – מתאים למי שמחפש ביצועים."
-    )
-
-    answers["usage"] = st.radio(
-        "שימוש עיקרי:",
-        ["עירוני", "בין-עירוני", "מעורב"],
-        help="עירוני = קומפקטי וחסכוני, בין-עירוני = מנוע חזק יותר, מעורב = שילוב של שניהם."
-    )
-
-    answers["driver_age"] = st.selectbox(
-        "גיל הנהג הראשי:",
-        ["עד 21", "21–24", "25–34", "35+"],
-        help="גיל הנהג משפיע ישירות על עלות הביטוח – נהגים צעירים משלמים יותר."
-    )
-
-    answers["license_years"] = st.selectbox(
-        "ותק רישיון נהיגה:",
-        ["פחות משנה", "1–3 שנים", "3–5 שנים", "מעל 5 שנים"],
-        help="נהג חדש נחשב מסוכן יותר לחברות הביטוח – לכן העלויות גבוהות יותר."
-    )
-
-    answers["insurance_history"] = st.selectbox(
-        "עבר ביטוחי/תעבורתי:",
-        ["ללא", "תאונה אחת", "מספר תביעות"],
-        help="עבר נקי = ביטוח זול יותר. תאונות/תביעות מעלות משמעותית את המחיר."
-    )
-
-    answers["annual_km"] = st.selectbox(
-        "נסועה שנתית (ק״מ):",
-        ["עד 10,000", "10,000–20,000", "20,000–30,000", "מעל 30,000"],
-        help="מי שנוסע הרבה צריך רכב אמין וחסכוני יותר בתחזוקה ובדלק."
-    )
-
-    answers["passengers"] = st.selectbox(
-        "מספר נוסעים עיקרי:",
-        ["לרוב לבד", "2 אנשים", "3–5 נוסעים", "מעל 5"],
-        help="משפיע על גודל הרכב – מיני מתאים ליחיד/זוג, משפחתי מתאים ל-4–5 נוסעים."
-    )
-
-    answers["maintenance_budget"] = st.selectbox(
-        "יכולת תחזוקה:",
-        ["מתחת 3,000 ₪", "3,000–5,000 ₪", "מעל 5,000 ₪"],
-        help="כמה כסף מוכן להוציא בשנה על טיפולים ותיקונים."
-    )
-
-    answers["reliability_vs_comfort"] = st.selectbox(
-        "מה חשוב יותר?",
-        ["אמינות מעל הכול", "איזון אמינות ונוחות", "נוחות/ביצועים"],
-        help="אמינות = פחות מוסך. נוחות/ביצועים = רכב מהנה אבל עלול לעלות יותר בתחזוקה."
-    )
-
-    answers["eco_pref"] = st.selectbox(
-        "שיקולי איכות סביבה:",
-        ["חשוב רכב ירוק/חסכוני", "לא משנה"],
-        help="מאפשר עדיפות לרכב היברידי/חשמלי כדי לחסוך בדלק ולזהם פחות."
-    )
-
-    answers["resale_value"] = st.selectbox(
-        "שמירת ערך עתידית:",
-        ["חשוב לשמור על ערך", "פחות חשוב"],
-        help="שמירת ערך חשובה למי שמתכנן למכור את הרכב בעוד כמה שנים."
-    )
-
-    answers["extra"] = st.text_area(
-        "משהו נוסף שתרצה לציין?",
-        help="כאן אפשר להוסיף דרישות מיוחדות – כמו צבע, מערכות בטיחות או גג נפתח."
-    )
-
+    answers["car_type"] = st.selectbox("סוג רכב:", ["סדאן", "האצ'בק", "SUV", "מיני", "סופר מיני", "סטיישן", "טנדר", "משפחתי"])
+    answers["gearbox"] = st.radio("גיר:", ["לא משנה", "אוטומט", "ידני"])
+    answers["turbo"] = st.radio("מנוע טורבו:", ["לא משנה", "כן", "לא"])
+    answers["usage"] = st.radio("שימוש עיקרי:", ["עירוני", "בין-עירוני", "מעורב"])
+    answers["driver_age"] = st.selectbox("גיל הנהג הראשי:", ["עד 21", "21–24", "25–34", "35+"])
+    answers["license_years"] = st.selectbox("ותק רישיון נהיגה:", ["פחות משנה", "1–3 שנים", "3–5 שנים", "מעל 5 שנים"])
+    answers["insurance_history"] = st.selectbox("עבר ביטוחי/תעבורתי:", ["ללא", "תאונה אחת", "מספר תביעות"])
+    answers["annual_km"] = st.selectbox("נסועה שנתית (ק״מ):", ["עד 10,000", "10,000–20,000", "20,000–30,000", "מעל 30,000"])
+    answers["passengers"] = st.selectbox("מספר נוסעים עיקרי:", ["לרוב לבד", "2 אנשים", "3–5 נוסעים", "מעל 5"])
+    answers["maintenance_budget"] = st.selectbox("יכולת תחזוקה:", ["מתחת 3,000 ₪", "3,000–5,000 ₪", "מעל 5,000 ₪"])
+    answers["reliability_vs_comfort"] = st.selectbox("מה חשוב יותר?", ["אמינות מעל הכול", "איזון אמינות ונוחות", "נוחות/ביצועים"])
+    answers["eco_pref"] = st.selectbox("שיקולי איכות סביבה:", ["חשוב רכב ירוק/חסכוני", "לא משנה"])
+    answers["resale_value"] = st.selectbox("שמירת ערך עתידית:", ["חשוב לשמור על ערך", "פחות חשוב"])
+    answers["extra"] = st.text_area("משהו נוסף שתרצה לציין?")
     submitted = st.form_submit_button("שלח וקבל המלצה")
 
-# =============================
-# טיפול אחרי שליחה
-# =============================
 if submitted:
-    with st.spinner("📊 סינון ראשוני מול מאגר משרד התחבורה..."):
+    with st.spinner("📊 סינון קשיח מול המאגר..."):
         verified_models = filter_with_mot(answers)
 
-    with st.spinner("🌐 Gemini בונה טבלת 10 פרמטרים..."):
-        params_data = fetch_models_10params(answers, verified_models)
+    with st.spinner("🌐 Gemini מוסיף נתונים יבשים..."):
+        enriched_data = fetch_models_from_gemini(answers, verified_models)
 
-    try:
-        df_params = pd.DataFrame(params_data).T
-
-        COLUMN_TRANSLATIONS = {
-            "price_range": "טווח מחירון",
-            "availability": "זמינות בישראל",
-            "insurance_total": "ביטוח חובה + צד ג׳",
-            "license_fee": "אגרת רישוי",
-            "maintenance": "תחזוקה שנתית",
-            "common_issues": "תקלות נפוצות",
-            "fuel_consumption": "צריכת דלק (ק״מ לליטר)",
-            "depreciation": "ירידת ערך (%)",
-            "safety": "דירוג בטיחות (כוכבים)",
-            "parts_availability": "זמינות חלפים"
-        }
-        df_params.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
-
-        st.session_state["df_params"] = df_params
-
-        st.subheader("🟩 טבלת 10 פרמטרים")
-        st.dataframe(df_params, use_container_width=True)
-
-    except Exception as e:
-        st.warning("⚠️ בעיה בנתוני JSON")
-        st.write(params_data)
-
-    with st.spinner("⚡ GPT מסכם ומדרג..."):
-        summary = final_recommendation_with_gpt(answers, params_data)
-        st.session_state["summary"] = summary
+    with st.spinner("⚡ GPT מסנן ומדרג..."):
+        summary = final_recommendation_with_gpt(answers, enriched_data)
 
     st.subheader("🔎 ההמלצה הסופית שלך")
-    st.write(st.session_state["summary"])
+    st.write(summary)
 
-    save_log(answers, params_data, st.session_state["summary"])
-
-# =============================
-# הורדת טבלה מה-session
-# =============================
-if "df_params" in st.session_state:
-    csv2 = st.session_state["df_params"].to_csv(index=True, encoding="utf-8-sig")
-    st.download_button("⬇️ הורד טבלת 10 פרמטרים", csv2, "params_data.csv", "text/csv")
-
-# =============================
-# כפתור הורדה של כל ההיסטוריה
-# =============================
-log_file = "car_advisor_logs.csv"
-if os.path.exists(log_file):
-    with open(log_file, "rb") as f:
-        st.download_button(
-            "⬇️ הורד את כל היסטוריית השאלונים",
-            f,
-            file_name="car_advisor_logs.csv",
-            mime="text/csv"
-        )
+    # שמירה ב-Cache
+    save_cache(enriched_data)
