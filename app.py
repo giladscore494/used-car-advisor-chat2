@@ -1,4 +1,3 @@
-
 import os
 import re
 import json
@@ -85,7 +84,8 @@ def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
 # שלב 2א – Gemini מחזיר טווחי מחירים + status + reason
 # =============================
 def fetch_price_ranges(answers, verified_models, max_retries=5, wait_seconds=2):
-    limited_models = verified_models[:20]
+    # שולחים את כל הדגמים שעברו סינון ראשוני
+    limited_models = verified_models  
 
     payload = {
         "contents": [{
@@ -95,7 +95,7 @@ def fetch_price_ranges(answers, verified_models, max_retries=5, wait_seconds=2):
                 המשתמש נתן את ההעדפות הבאות:
                 {answers}
 
-                רשימת דגמים ממאגר משרד התחבורה (עד 20):
+                רשימת דגמים ממאגר משרד התחבורה:
                 {limited_models}
 
                 עליך לבחור מהרשימה רק את הדגמים שתואמים להעדפות המשתמש:
