@@ -81,9 +81,24 @@ def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
     return df_filtered.to_dict(orient="records")
 
 # =============================
-# שלב 2 – Gemini בונה טבלת פרמטרים
+# פונקציה חדשה – סינון לפי תקציב אחרי Gemini
 # =============================
-def fetch_models_10params(answers, verified_models):
+def filter_by_budget(params_data, budget_min, budget_max):
+    results = {}
+    for model, values in params_data.items():
+        price_text = values.get("price_range", "")
+        nums = [int(x.replace(",", "").replace("₪","")) for x in re.findall(r"\d[\d,]*", price_text)]
+        if not nums:
+            continue
+        avg_price = sum(nums) / len(nums)
+        if budget_min <= avg_price <= budget_max:
+            results[model] = values
+    return results
+
+# =============================
+# שלב 2א – Gemini מחזיר רק טווחי מחירים
+# =============================
+def fetch_price_ranges(answers, verified_models):
     payload = {
         "contents": [{
             "role": "user",
@@ -98,6 +113,36 @@ def fetch_models_10params(answers, verified_models):
                 עבור כל דגם החזר JSON בפורמט:
                 {{
                   "Model (year, engine, fuel)": {{
+                     "price_range": "טווח מחירון ביד שנייה בישראל (₪)"
+                  }}
+                }}
+
+                חוקים:
+                - חובה להחזיר טווח מחירון אמיתי מהשוק הישראלי בלבד.
+                - אסור להמציא מחירים. אם לא ידוע → "לא ידוע".
+                - אל תוסיף דגמים חדשים.
+                """
+            }]
+        }]
+    }
+    answer = safe_gemini_call(payload)
+    return parse_gemini_json(answer)
+
+# =============================
+# שלב 2ב – Gemini מחזיר פרמטרים מלאים
+# =============================
+def fetch_full_params(filtered_models):
+    payload = {
+        "contents": [{
+            "role": "user",
+            "parts": [{
+                "text": f"""
+                קח את רשימת הרכבים המסוננים (כבר בתוך התקציב):
+                {filtered_models}
+
+                עבור כל דגם החזר JSON בפורמט:
+                {{
+                  "Model (year, engine, fuel)": {{
                      "price_range": "טווח מחירון ביד שנייה בישראל (₪)",
                      "availability": "זמינות בישראל",
                      "insurance_total": "עלות ביטוח חובה + צד ג' (₪)",
@@ -108,16 +153,14 @@ def fetch_models_10params(answers, verified_models):
                      "depreciation": "ירידת ערך ממוצעת (%)",
                      "safety": "דירוג בטיחות (כוכבים)",
                      "parts_availability": "זמינות חלפים בישראל",
-                     "turbo": 0/1,
-                     "out_of_budget": false
+                     "turbo": 0/1
                   }}
                 }}
 
                 חוקים:
-                - חובה להחזיר טווח מחירון אמיתי מהשוק הישראלי בלבד.
-                - אם טווח המחיר מחוץ לתקציב ({answers['budget_min']}–{answers['budget_max']} ₪) → החזר "out_of_budget": true.
-                - אם בטווח → "out_of_budget": false.
-                - אסור להמציא מחירים. אם לא ידוע → "לא ידוע".
+                - החזר את כל הדגמים שקיבלת, אל תוסיף חדשים.
+                - אם אין מחיר או נתון → כתוב 'לא ידוע'.
+                - אסור להמציא מחירים.
                 """
             }]
         }]
@@ -138,7 +181,6 @@ def final_recommendation_with_gpt(answers, params_data):
 
     צור סיכום בעברית:
     - בחר עד 5 דגמים בלבד
-    - אל תכלול דגמים עם "out_of_budget": true
     - פרט יתרונות וחסרונות
     - התייחס לעלות ביטוח, תחזוקה, ירידת ערך, אמינות ושימוש עיקרי
     - הסבר למה הדגמים הכי מתאימים
@@ -209,8 +251,16 @@ if submitted:
     with st.spinner("📊 סינון ראשוני מול מאגר משרד התחבורה..."):
         verified_models = filter_with_mot(answers)
 
+    with st.spinner("🌐 Gemini מחזיר טווחי מחירים..."):
+        price_data = fetch_price_ranges(answers, verified_models)
+
+    filtered_models = filter_by_budget(price_data, answers["budget_min"], answers["budget_max"])
+    if not filtered_models:
+        st.warning("⚠️ לא נמצאו רכבים בטווח התקציב")
+        st.stop()
+
     with st.spinner("🌐 Gemini בונה טבלת פרמטרים..."):
-        params_data = fetch_models_10params(answers, verified_models)
+        params_data = fetch_full_params(filtered_models)
 
     try:
         df_params = pd.DataFrame(params_data).T
@@ -226,8 +276,7 @@ if submitted:
             "depreciation": "ירידת ערך",
             "safety": "בטיחות",
             "parts_availability": "חלפים בישראל",
-            "turbo": "טורבו",
-            "out_of_budget": "מחוץ לתקציב"
+            "turbo": "טורבו"
         }
         df_params.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
 
