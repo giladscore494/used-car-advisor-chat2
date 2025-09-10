@@ -2,7 +2,6 @@ import os
 import re
 import json
 import requests
-import datetime
 import streamlit as st
 import pandas as pd
 from openai import OpenAI
@@ -86,7 +85,7 @@ def scrape_price_and_turbo_batch(models):
     enriched = {}
     for m in models:
         name = m["model"]
-        # דוגמת Regex פשוטה למציאת מחיר
+        # Regex למציאת טווח מחירים
         match = re.search(r"(\d{2},\d{3})[-–](\d{2},\d{3})", data)
         price = f"{match.group(1)}–{match.group(2)} ₪" if match else None
         turbo = 1 if ("טורבו" in data or "TURBO" in data) else 0
@@ -107,7 +106,6 @@ def verify_budget(price_range, budget_min, budget_max):
     budget_min_eff = budget_min * 0.87
     budget_max_eff = budget_max * 1.13
 
-    # שליפת מספרים מהטקסט (למשל "20,000–28,000 ₪")
     nums = [re.sub(r"[^\d]", "", x) for x in price_range.replace("–","-").split("-")]
     nums = [int(x) for x in nums if x.isdigit()]
     if len(nums) != 2:
@@ -132,7 +130,7 @@ def final_filter(models, scraped_data, mot_df, budget_min, budget_max, turbo_pre
                 continue
 
         m["price_range"] = price
-        m["turbo"] = turbo_val  # 0/1
+        m["turbo"] = turbo_val
         passed.append(m)
     return passed
 
@@ -178,7 +176,7 @@ if submitted:
         scraped_data = scrape_price_and_turbo_batch(models)
 
     with st.spinner("✅ סינון קשיח..."):
-        mot_df = pd.read_csv("car_models_israel.csv")
+        mot_df = pd.read_csv("car_models_israel_clean.csv")  # ← שונה לשם הקובץ הנכון
         final_models = final_filter(models, scraped_data, mot_df,
                                     answers["budget_min"], answers["budget_max"], answers["turbo"])
 
