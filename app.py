@@ -1,3 +1,4 @@
+
 import os
 import re
 import json
@@ -81,69 +82,7 @@ def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
     return df_filtered.to_dict(orient="records")
 
 # =============================
-# פונקציה – סינון לפי תקציב (כולל Debug)
-# =============================
-def filter_by_budget(params_data, budget_min, budget_max):
-    results = {}
-    lower_limit = budget_min * 0.9
-    upper_limit = budget_max * 1.1
-
-    st.subheader("🔎 Debug – חישוב תקציב לרכבים")
-    st.write(f"גבולות תקציב לאחר סטייה: {lower_limit} – {upper_limit}")
-
-    for model, values in params_data.items():
-        price_text = str(values.get("price_range", "")).lower()
-        nums = []
-
-        # 1. מספרים רגילים
-        for match in re.findall(r"\d[\d,]*", price_text):
-            try:
-                nums.append(int(match.replace(",", "").replace("₪","")))
-            except:
-                pass
-
-        # 2. "85 אלף"
-        if "אלף" in price_text:
-            try:
-                k = int(re.search(r"(\d+)", price_text).group(1))
-                if k < 1000:
-                    nums.append(k * 1000)
-            except:
-                pass
-
-        # 3. "75k"
-        if "k" in price_text:
-            try:
-                k = int(re.search(r"(\d+)", price_text).group(1))
-                nums.append(k * 1000)
-            except:
-                pass
-
-        if not nums:
-            st.write(f"{model} → לא נמצאו מספרים בפלט: {price_text}")
-            continue
-
-        nums = sorted(set(nums))
-        in_budget = False
-        chosen_val = None
-
-        for n in nums:
-            if lower_limit <= n <= upper_limit:
-                in_budget = True
-                chosen_val = n
-                break
-
-        if in_budget:
-            results[model] = values
-            results[model]["_calculated_price"] = chosen_val
-            st.write(f"{model} → price_range: {price_text} → זוהה: {nums} → ✅ נכנס (נבחר {chosen_val})")
-        else:
-            st.write(f"{model} → price_range: {price_text} → זוהה: {nums} → ❌ מחוץ לתקציב")
-
-    return results
-
-# =============================
-# שלב 2א – Gemini מחזיר טווחי מחירים (עם כל השאלון)
+# שלב 2א – Gemini מחזיר טווחי מחירים + status + reason
 # =============================
 def fetch_price_ranges(answers, verified_models, max_retries=5, wait_seconds=2):
     limited_models = verified_models[:20]
@@ -173,15 +112,16 @@ def fetch_price_ranges(answers, verified_models, max_retries=5, wait_seconds=2):
                 עבור כל דגם החזר JSON בפורמט:
                 {{
                   "Model (year, engine, fuel)": {{
-                     "price_range": "טווח מחירון ביד שנייה בישראל (₪)"
+                     "price_range": "טווח מחירון ביד שנייה בישראל (₪)",
+                     "status": "included/excluded",
+                     "reason": "הסבר קצר למה נכלל או נפסל"
                   }}
                 }}
 
                 חוקים:
                 - חובה להתחשב בכל ההעדפות שניתנו.
-                - החזר לפחות 5 דגמים שמתאימים בצורה הטובה ביותר.
-                - אם אין התאמה מלאה → בחר את הקרובים ביותר.
-                - החזר מספרים בלבד (לדוגמה: 55000–75000), בלי טקסטים.
+                - החזר לפחות 5 דגמים (או קרובים ביותר אם אין התאמה מלאה).
+                - החזר מספרים בלבד (לדוגמה: 55000–75000).
                 - אסור להחזיר טקסט חופשי – רק JSON חוקי.
                 """
             }]
@@ -200,44 +140,67 @@ def fetch_price_ranges(answers, verified_models, max_retries=5, wait_seconds=2):
     return {}
 
 # =============================
-# שלב 2ב – Gemini מחזיר פרמטרים מלאים
+# שלב 2ב – Debug מפורט על כל דגם
 # =============================
-def fetch_full_params(filtered_models):
-    payload = {
-        "contents": [{
-            "role": "user",
-            "parts": [{
-                "text": f"""
-                קח את רשימת הרכבים המסוננים (כבר בתוך התקציב):
-                {filtered_models}
+def debug_and_filter(params_data, budget_min, budget_max):
+    results = {}
+    lower_limit = budget_min * 0.9
+    upper_limit = budget_max * 1.1
 
-                עבור כל דגם החזר JSON בפורמט:
-                {{
-                  "Model (year, engine, fuel)": {{
-                     "price_range": "טווח מחירון ביד שנייה בישראל (₪)",
-                     "availability": "זמינות בישראל",
-                     "insurance_total": "עלות ביטוח חובה + צד ג' (₪)",
-                     "license_fee": "אגרת רישוי/טסט שנתית (₪)",
-                     "maintenance": "תחזוקה שנתית ממוצעת (₪)",
-                     "common_issues": "תקלות נפוצות",
-                     "fuel_consumption": "צריכת דלק אמיתית (ק״מ לליטר)",
-                     "depreciation": "ירידת ערך ממוצעת (%)",
-                     "safety": "דירוג בטיחות (כוכבים)",
-                     "parts_availability": "זמינות חלפים בישראל",
-                     "turbo": 0/1
-                  }}
-                }}
+    st.subheader("🔎 Debug – בדיקת דגמים מול כל החוקים")
+    st.write(f"גבולות תקציב לאחר סטייה: {lower_limit} – {upper_limit}")
 
-                חוקים:
-                - החזר את כל הדגמים שקיבלת, אל תוסיף חדשים.
-                - אם אין מחיר או נתון → כתוב 'לא ידוע'.
-                - אסור להמציא מחירים.
-                """
-            }]
-        }]
-    }
-    answer = safe_gemini_call(payload)
-    return parse_gemini_json(answer)
+    if not params_data:
+        st.warning("⚠️ Gemini לא החזיר בכלל דגמים לסינון")
+        return {}
+
+    for model, values in params_data.items():
+        price_text = str(values.get("price_range", "")).lower()
+        status = values.get("status", "unknown")
+        reason = values.get("reason", "")
+
+        # חילוץ מספרים מהמחיר
+        nums = []
+        for match in re.findall(r"\d[\d,]*", price_text):
+            try:
+                nums.append(int(match.replace(",", "").replace("₪","")))
+            except:
+                pass
+
+        if "אלף" in price_text:
+            try:
+                k = int(re.search(r"(\d+)", price_text).group(1))
+                if k < 1000:
+                    nums.append(k * 1000)
+            except:
+                pass
+
+        if "k" in price_text:
+            try:
+                k = int(re.search(r"(\d+)", price_text).group(1))
+                nums.append(k * 1000)
+            except:
+                pass
+
+        nums = sorted(set(nums))
+
+        # בדיקת תקציב
+        in_budget = False
+        chosen_val = None
+        for n in nums:
+            if lower_limit <= n <= upper_limit:
+                in_budget = True
+                chosen_val = n
+                break
+
+        if status == "included" and in_budget:
+            results[model] = values
+            results[model]["_calculated_price"] = chosen_val
+            st.write(f"✅ {model} → נכלל | סיבה: {reason} | מחיר: {price_text} → זוהה: {nums} → נבחר {chosen_val}")
+        else:
+            st.write(f"❌ {model} → נפסל | סיבה: {reason} | מחיר: {price_text} → זוהה: {nums}")
+
+    return results
 
 # =============================
 # שלב 3 – GPT מסכם ומדרג
@@ -322,69 +285,19 @@ if submitted:
     with st.spinner("📊 סינון ראשוני מול מאגר משרד התחבורה..."):
         verified_models = filter_with_mot(answers)
 
-    with st.spinner("🌐 Gemini מחזיר טווחי מחירים..."):
+    with st.spinner("🌐 Gemini מחזיר טווחי מחירים + סיבות..."):
         price_data = fetch_price_ranges(answers, verified_models)
 
-    filtered_models = filter_by_budget(price_data, answers["budget_min"], answers["budget_max"])
+    filtered_models = debug_and_filter(price_data, answers["budget_min"], answers["budget_max"])
     if not filtered_models:
-        st.warning("⚠️ לא נמצאו רכבים בטווח התקציב")
+        st.warning("⚠️ לא נמצאו רכבים מתאימים")
         st.stop()
 
-    with st.spinner("🌐 Gemini בונה טבלת פרמטרים..."):
-        params_data = fetch_full_params(filtered_models)
-
-    try:
-        df_params = pd.DataFrame(params_data).T
-
-        COLUMN_TRANSLATIONS = {
-            "price_range": "טווח מחירון",
-            "availability": "זמינות בישראל",
-            "insurance_total": "ביטוח חובה + צד ג׳",
-            "license_fee": "אגרת רישוי",
-            "maintenance": "תחזוקה שנתית",
-            "common_issues": "תקלות נפוצות",
-            "fuel_consumption": "צריכת דלק",
-            "depreciation": "ירידת ערך",
-            "safety": "בטיחות",
-            "parts_availability": "חלפים בישראל",
-            "turbo": "טורבו"
-        }
-        df_params.rename(columns=COLUMN_TRANSLATIONS, inplace=True)
-
-        st.session_state["df_params"] = df_params
-
-        st.subheader("🟩 טבלת פרמטרים")
-        st.dataframe(df_params, use_container_width=True)
-
-    except Exception as e:
-        st.warning("⚠️ בעיה בנתוני JSON")
-        st.write(params_data)
-
     with st.spinner("⚡ GPT מסכם ומדרג..."):
-        summary = final_recommendation_with_gpt(answers, params_data)
+        summary = final_recommendation_with_gpt(answers, filtered_models)
         st.session_state["summary"] = summary
 
     st.subheader("🔎 ההמלצה הסופית שלך")
     st.write(st.session_state["summary"])
 
-    save_log(answers, params_data, st.session_state["summary"])
-
-# =============================
-# הורדת טבלה מה-session
-# =============================
-if "df_params" in st.session_state:
-    csv2 = st.session_state["df_params"].to_csv(index=True, encoding="utf-8-sig")
-    st.download_button("⬇️ הורד טבלת פרמטרים", csv2, "params_data.csv", "text/csv")
-
-# =============================
-# כפתור הורדה של כל ההיסטוריה
-# =============================
-log_file = "car_advisor_logs.csv"
-if os.path.exists(log_file):
-    with open(log_file, "rb") as f:
-        st.download_button(
-            "⬇️ הורד את כל היסטוריית השאלונים",
-            f,
-            file_name="car_advisor_logs.csv",
-            mime="text/csv"
-        )
+    save_log(answers, filtered_models, st.session_state["summary"])
