@@ -114,26 +114,6 @@ def verify_budget(price_range, budget_min, budget_max):
     min_price, max_price = min(nums), max(nums)
     return not (max_price < budget_min_eff or min_price > budget_max_eff)
 
-def final_filter(models, scraped_data, mot_df, budget_min, budget_max, turbo_pref):
-    passed = []
-    for m in models:
-        model_name = m["model"]
-        if not verify_model_in_mot(mot_df, model_name):
-            continue
-
-        price, turbo_val = scraped_data.get(model_name, (None, None))
-        if not verify_budget(price, budget_min, budget_max):
-            continue
-
-        if turbo_pref != "לא משנה":
-            if (turbo_pref == "כן" and turbo_val == 0) or (turbo_pref == "לא" and turbo_val == 1):
-                continue
-
-        m["price_range"] = price
-        m["turbo"] = turbo_val
-        passed.append(m)
-    return passed
-
 # =============================
 # Streamlit UI
 # =============================
@@ -169,16 +149,54 @@ with st.form("car_form"):
 # טיפול אחרי שליחה
 # =============================
 if submitted:
+    # שלב 0: אילו קבצים קיימים
+    st.write("📂 קבצים בתיקייה הנוכחית:", os.listdir("."))
+
     with st.spinner("🧠 GPT מחפש דגמים מתאימים..."):
         models = fetch_models_with_gpt(answers)
+        st.write(f"🔎 GPT החזיר {len(models)} דגמים:")
+        st.json(models)
 
     with st.spinner("🌐 סקרייפר בודק מחירים וטורבו..."):
         scraped_data = scrape_price_and_turbo_batch(models)
+        st.write("📊 נתוני סקרייפר:")
+        st.json(scraped_data)
 
     with st.spinner("✅ סינון קשיח..."):
-        mot_df = pd.read_csv("car_models_israel_clean.csv")  # ← שונה לשם הקובץ הנכון
-        final_models = final_filter(models, scraped_data, mot_df,
-                                    answers["budget_min"], answers["budget_max"], answers["turbo"])
+        try:
+            mot_df = pd.read_csv("car_models_israel_clean.csv")
+        except FileNotFoundError as e:
+            st.error("❌ קובץ car_models_israel_clean.csv לא נמצא. ודא שהוא באמת נמצא ב-GitHub ובאותה תיקייה של app.py")
+            raise e
+
+        final_models = []
+        debug_log = []
+        for m in models:
+            model_name = m["model"]
+            reason = []
+
+            if not verify_model_in_mot(mot_df, model_name):
+                reason.append("❌ לא נמצא במאגר משרד התחבורה")
+
+            price, turbo_val = scraped_data.get(model_name, (None, None))
+            if not verify_budget(price, answers["budget_min"], answers["budget_max"]):
+                reason.append("❌ מחיר לא בתקציב (גם אחרי סטייה 13%)")
+
+            if answers["turbo"] != "לא משנה":
+                if (answers["turbo"] == "כן" and turbo_val == 0) or \
+                   (answers["turbo"] == "לא" and turbo_val == 1):
+                    reason.append("❌ לא עומד בדרישת טורבו")
+
+            if not reason:
+                m["price_range"] = price
+                m["turbo"] = turbo_val
+                final_models.append(m)
+                debug_log.append({model_name: "✅ עבר"})
+            else:
+                debug_log.append({model_name: reason})
+
+        st.write("📝 דוח סינון:")
+        st.json(debug_log)
 
     if final_models:
         df = pd.DataFrame(final_models)
