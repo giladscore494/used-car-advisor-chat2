@@ -51,42 +51,9 @@ def parse_gemini_json(answer):
         return {}
 
 # =============================
-# שלב 1 – סינון ראשוני מול מאגר משרד התחבורה
+# שלב 1 – Gemini מייצר עד 20 דגמים
 # =============================
-def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
-    if not os.path.exists(mot_file):
-        st.error(f"❌ קובץ המאגר '{mot_file}' לא נמצא בתיקייה. ודא שהעלית אותו.")
-        return []
-
-    df = pd.read_csv(mot_file)
-
-    for col in ["year", "engine_cc"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    year_min = int(answers["year_min"])
-    year_max = int(answers["year_max"])
-    cc_min = int(answers["engine_cc_min"])
-    cc_max = int(answers["engine_cc_max"])
-
-    mask_year = df["year"].between(year_min, year_max, inclusive="both")
-    mask_cc = df["engine_cc"].between(cc_min, cc_max, inclusive="both")
-    mask_fuel = df["fuel"] == answers["engine"]
-    mask_gear = (answers["gearbox"] == "לא משנה") | \
-                ((answers["gearbox"] == "אוטומט") & (df["automatic"] == 1)) | \
-                ((answers["gearbox"] == "ידני") & (df["automatic"] == 0))
-
-    df_filtered = df[mask_year & mask_cc & mask_fuel & mask_gear].copy()
-
-    return df_filtered.to_dict(orient="records")
-
-# =============================
-# שלב 2א – Gemini מחזיר טווחי מחירים + status + reason
-# =============================
-def fetch_price_ranges(answers, verified_models, max_retries=5, wait_seconds=2):
-    # שולחים את כל הדגמים שעברו סינון ראשוני
-    limited_models = verified_models  
-
+def gemini_propose_models(answers, max_retries=5, wait_seconds=2):
     payload = {
         "contents": [{
             "role": "user",
@@ -95,33 +62,32 @@ def fetch_price_ranges(answers, verified_models, max_retries=5, wait_seconds=2):
                 המשתמש נתן את ההעדפות הבאות:
                 {answers}
 
-                רשימת דגמים ממאגר משרד התחבורה:
-                {limited_models}
-
-                עליך לבחור מהרשימה רק את הדגמים שתואמים להעדפות המשתמש:
-                - סוג רכב: {answers['car_type']}
-                - שימוש עיקרי: {answers['usage']}
-                - גיל נהג ראשי: {answers['driver_age']}
-                - תחזוקה מקסימלית: {answers['maintenance_budget']}
-                - מספר נוסעים: {answers['passengers']}
-                - אמינות מול נוחות: {answers['reliability_vs_comfort']}
-                - שיקולי איכות סביבה: {answers['eco_pref']}
-                - שמירת ערך עתידית: {answers['resale_value']}
-                - מנוע טורבו: {answers['turbo']}
+                המשימה שלך: הצע עד 20 דגמים שמתאימים לשאלון. 
+                כל דגם חייב להיות מוחזר בפורמט JSON עם כל הפרמטרים.
 
                 עבור כל דגם החזר JSON בפורמט:
                 {{
                   "Model (year, engine, fuel)": {{
                      "price_range": "טווח מחירון ביד שנייה בישראל (₪)",
+                     "availability": "זמינות בישראל",
+                     "insurance_total": "עלות ביטוח חובה + צד ג' (₪)",
+                     "license_fee": "אגרת רישוי/טסט שנתית (₪)",
+                     "maintenance": "תחזוקה שנתית ממוצעת (₪)",
+                     "common_issues": "תקלות נפוצות",
+                     "fuel_consumption": "צריכת דלק אמיתית (ק״מ לליטר)",
+                     "depreciation": "ירידת ערך ממוצעת (%)",
+                     "safety": "דירוג בטיחות (כוכבים)",
+                     "parts_availability": "זמינות חלפים בישראל",
+                     "turbo": 0/1,
                      "status": "included/excluded",
                      "reason": "הסבר קצר למה נכלל או נפסל"
                   }}
                 }}
 
                 חוקים:
+                - החזר לפחות 5 דגמים (ועד 20).
                 - חובה להתחשב בכל ההעדפות שניתנו.
-                - החזר לפחות 5 דגמים (או קרובים ביותר אם אין התאמה מלאה).
-                - החזר מספרים בלבד (לדוגמה: 55000–75000).
+                - החזר מספרים בלבד בטווח המחיר (למשל: 25000-35000).
                 - אסור להחזיר טקסט חופשי – רק JSON חוקי.
                 """
             }]
@@ -133,14 +99,37 @@ def fetch_price_ranges(answers, verified_models, max_retries=5, wait_seconds=2):
         parsed = parse_gemini_json(answer)
 
         if parsed and isinstance(parsed, dict) and len(parsed) >= 1:
-            return parsed  # ✅ ברגע שקיבלנו JSON טוב – ממשיכים
+            return parsed
 
         time.sleep(wait_seconds)
 
     return {}
 
 # =============================
-# שלב 2ב – Debug מפורט על כל דגם
+# שלב 2 – הצלבה עם מאגר משרד התחבורה
+# =============================
+def cross_check_with_mot(gemini_models, mot_file="car_models_israel_clean.csv"):
+    if not os.path.exists(mot_file):
+        st.error(f"❌ קובץ המאגר '{mot_file}' לא נמצא בתיקייה.")
+        return gemini_models
+
+    df = pd.read_csv(mot_file)
+    df_models = df["model"].astype(str).str.lower().unique().tolist()
+
+    checked = {}
+    for model, values in gemini_models.items():
+        model_name = model.split("(")[0].strip().lower()
+        if model_name in df_models:
+            checked[model] = values
+        else:
+            values["status"] = "excluded"
+            values["reason"] = "לא נמצא במאגר משרד התחבורה"
+            checked[model] = values
+
+    return checked
+
+# =============================
+# שלב 3 – Debug + סינון תקציב
 # =============================
 def debug_and_filter(params_data, budget_min, budget_max):
     results = {}
@@ -151,7 +140,7 @@ def debug_and_filter(params_data, budget_min, budget_max):
     st.write(f"גבולות תקציב לאחר סטייה: {lower_limit} – {upper_limit}")
 
     if not params_data:
-        st.warning("⚠️ Gemini לא החזיר בכלל דגמים לסינון")
+        st.warning("⚠️ Gemini לא החזיר בכלל דגמים")
         return {}
 
     for model, values in params_data.items():
@@ -203,7 +192,7 @@ def debug_and_filter(params_data, budget_min, budget_max):
     return results
 
 # =============================
-# שלב 3 – GPT מסכם ומדרג
+# שלב 4 – GPT מסכם ומדרג
 # =============================
 def final_recommendation_with_gpt(answers, params_data):
     text = f"""
@@ -216,7 +205,7 @@ def final_recommendation_with_gpt(answers, params_data):
     צור סיכום בעברית:
     - בחר עד 5 דגמים בלבד
     - פרט יתרונות וחסרונות
-    - התייחס לעלות ביטוח, תחזוקה, ירידת ערך, אמינות ושימוש עיקרי
+    - התייחס לכל 10 הפרמטרים (ביטוח, רישוי, תחזוקה, אמינות, צריכת דלק, ירידת ערך וכו’)
     - הסבר למה הדגמים הכי מתאימים
     """
     response = client.chat.completions.create(
@@ -282,13 +271,13 @@ with st.form("car_form"):
 # טיפול אחרי שליחה
 # =============================
 if submitted:
-    with st.spinner("📊 סינון ראשוני מול מאגר משרד התחבורה..."):
-        verified_models = filter_with_mot(answers)
+    with st.spinner("🌐 Gemini מייצר עד 20 דגמים עם פרמטרים..."):
+        gemini_models = gemini_propose_models(answers)
 
-    with st.spinner("🌐 Gemini מחזיר טווחי מחירים + סיבות..."):
-        price_data = fetch_price_ranges(answers, verified_models)
+    with st.spinner("📊 הצלבה מול מאגר משרד התחבורה..."):
+        checked_models = cross_check_with_mot(gemini_models)
 
-    filtered_models = debug_and_filter(price_data, answers["budget_min"], answers["budget_max"])
+    filtered_models = debug_and_filter(checked_models, answers["budget_min"], answers["budget_max"])
     if not filtered_models:
         st.warning("⚠️ לא נמצאו רכבים מתאימים")
         st.stop()
