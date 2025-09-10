@@ -81,7 +81,7 @@ def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
     return df_filtered.to_dict(orient="records")
 
 # =============================
-# פונקציה חדשה – סינון לפי תקציב עם חריגה ±10%
+# פונקציה חדשה – סינון לפי תקציב עם קצה תחתון (±10%)
 # =============================
 def filter_by_budget(params_data, budget_min, budget_max):
     results = {}
@@ -89,20 +89,35 @@ def filter_by_budget(params_data, budget_min, budget_max):
     upper_limit = budget_max * 1.1
 
     for model, values in params_data.items():
-        price_text = str(values.get("price_range", ""))
-        nums = [int(x.replace(",", "").replace("₪","")) for x in re.findall(r"\d[\d,]*", price_text)]
+        price_text = str(values.get("price_range", "")).lower()
+
+        nums = []
+
+        # 1. לתפוס מספרים רגילים (כולל טווחים עם מקף)
+        for match in re.findall(r"\d[\d,]*", price_text):
+            try:
+                nums.append(int(match.replace(",", "").replace("₪","")))
+            except:
+                pass
+
+        # 2. לתפוס "85 אלף" → 85000
+        if "אלף" in price_text and not nums:
+            try:
+                k = int(re.search(r"(\d+)", price_text).group(1))
+                if k < 1000:
+                    nums.append(k * 1000)
+            except:
+                pass
 
         if not nums:
             continue
 
-        # אם יש טווח מחירים – ניקח ממוצע, אם יש רק מספר אחד – ניקח אותו
-        if len(nums) >= 2:
-            avg_price = (nums[0] + nums[1]) / 2
-        else:
-            avg_price = nums[0]
+        # לוקחים את הקצה התחתון של הטווח
+        price_val = min(nums)
 
-        if lower_limit <= avg_price <= upper_limit:
+        if lower_limit <= price_val <= upper_limit:
             results[model] = values
+            results[model]["_calculated_price"] = price_val  # לשקיפות
 
     return results
 
