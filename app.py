@@ -2,6 +2,8 @@ import os
 import re
 import json
 import requests
+import datetime
+import time
 import streamlit as st
 import pandas as pd
 from openai import OpenAI
@@ -10,125 +12,251 @@ from openai import OpenAI
 # מפתחות API
 # =============================
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-if not OPENAI_API_KEY or not FIRECRAWL_API_KEY:
+if not OPENAI_API_KEY or not GEMINI_API_KEY:
     st.error("❌ לא נמצאו מפתחות API. ודא שהגדרת אותם ב-secrets.")
     st.stop()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # =============================
-# GPT – בחירת 20 דגמים (לולאת ניסיון)
+# קריאה בטוחה ל-Gemini
 # =============================
-def fetch_models_with_gpt(answers, retries=3):
+def safe_gemini_call(payload, model="gemini-2.0-flash"):
+    url = f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent"
+    headers = {"Content-Type": "application/json"}
+    params = {"key": GEMINI_API_KEY}
+    try:
+        r = requests.post(url, headers=headers, params=params, json=payload, timeout=120)
+        data = r.json()
+        if "candidates" not in data:
+            return f"שגיאת Gemini: {data}"
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        return f"שגיאה: {e}"
+
+# =============================
+# פיענוח JSON – כולל טיפול ברשימות
+# =============================
+def parse_gemini_json(answer):
+    cleaned = answer.strip()
+    if "```" in cleaned:
+        match = re.search(r"```(?:json)?(.*?)```", cleaned, re.DOTALL)
+        if match:
+            cleaned = match.group(1).strip()
+    try:
+        data = json.loads(cleaned)
+        # אם זה רשימה – נאחד לאובייקט אחד
+        if isinstance(data, list):
+            merged = {}
+            for item in data:
+                if isinstance(item, dict):
+                    merged.update(item)
+            return merged
+        return data
+    except Exception:
+        return {}
+
+# =============================
+# שלב 1 – Gemini מייצר עד 20 דגמים
+# =============================
+def gemini_propose_models(answers, max_retries=5, wait_seconds=2):
     base_prompt = f"""
-    המשתמש הגדיר את ההעדפות הבאות:
+    המשתמש נתן את ההעדפות הבאות:
     {answers}
 
-    החזר עד 20 דגמים שמתאימים לשוק הישראלי.
+    המשימה שלך: הצע עד 20 דגמים שמתאימים לשאלון. 
+    כל דגם חייב להיות מוחזר בפורמט JSON מלא.
 
-    כללים חשובים:
-    - אם התקציב נמוך (עד 20 אלף ₪) → החזר רק רכבים ישנים, פשוטים, עם תחזוקה זולה.
-    - אם התקציב בינוני (20–40 אלף ₪) → החזר רכבים משפחתיים משומשים ונפוצים.
-    - אם התקציב גבוה (40–80 אלף ₪) → החזר רכבים משומשים חדשים יותר.
-    - אם התקציב מעל 80 אלף ₪ → אפשר גם רכבים חדשים יחסית.
-    - אסור בשום אופן להחזיר רכבים יקרים יותר מהתקציב בפועל.
+    דוגמה לפורמט שאתה חייב להחזיר:
+    [
+      {{
+        "Toyota Corolla Hybrid (2019, 1.8L, היברידי-בנזין)": {{
+           "price_range": "80000-95000",
+           "availability": "גבוהה",
+           "insurance_total": "4500",
+           "license_fee": "1200",
+           "maintenance": "2500",
+           "common_issues": "נדיר",
+           "fuel_consumption": "22",
+           "depreciation": "נמוכה",
+           "safety": "5",
+           "parts_availability": "גבוהה",
+           "turbo": 0,
+           "status": "included",
+           "reason": "מתאים לדרישות: היברידי, סדאן, אמינות גבוהה"
+        }}
+      }},
+      {{
+        "Hyundai Ioniq Hybrid (2018, 1.6L, היברידי-בנזין)": {{
+           "price_range": "65000-75000",
+           "availability": "בינונית",
+           "insurance_total": "4000",
+           "license_fee": "1100",
+           "maintenance": "2800",
+           "common_issues": "מצמד",
+           "fuel_consumption": "23",
+           "depreciation": "בינונית",
+           "safety": "5",
+           "parts_availability": "בינונית",
+           "turbo": 0,
+           "status": "included",
+           "reason": "חסכונית, מתאימה לנהג צעיר"
+        }}
+      }}
+    ]
 
-    ❌ אל תחזיר שום טקסט, הערה או הסבר.
-    ✅ החזר אך ורק JSON תקני במבנה רשימה של אובייקטים.
+    חוקים:
+    - החזר לפחות 5 דגמים (ועד 20).
+    - כל הדגמים חייבים להיות באותו פורמט כמו בדוגמה.
+    - אסור להחזיר טקסט חופשי – רק JSON חוקי עם הסוגריים המרובעים.
     """
 
-    for attempt in range(retries):
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": base_prompt}],
-            temperature=0.3,
-        )
-        answer = response.choices[0].message.content.strip()
+    payload = {"contents": [{"role": "user", "parts": [{"text": base_prompt}]}]}
 
-        # Debug: להציג פלט גולמי
-        st.write(f"📤 ניסיון {attempt+1}, פלט גולמי מ-GPT:")
-        st.text(answer)
+    for attempt in range(max_retries):
+        answer = safe_gemini_call(payload)
+        st.write(f"🔎 Gemini raw output (נסיון {attempt+1}):", answer)
 
-        try:
-            data = json.loads(re.search(r"\[.*\]", answer, re.S).group())
-            if isinstance(data, list) and len(data) > 0:
-                return data
-        except Exception:
-            pass
+        parsed = parse_gemini_json(answer)
+        if parsed and isinstance(parsed, dict) and len(parsed) >= 1:
+            return parsed
 
-        # אם נכשל, נחמיר את הפרומפט
-        base_prompt += "\n\n❌ התעלם מכל דבר אחר והחזר JSON בלבד, ללא טקסט נוסף."
+        # אם לא חוקי – נחזק את ההוראות
+        payload["contents"][0]["parts"][0]["text"] = base_prompt + "\n⚠️ החזרת פלט לא חוקי. החזר שוב JSON חוקי בלבד."
 
-    return []
+        time.sleep(wait_seconds)
+
+    return {}
 
 # =============================
-# סקרייפר בזמן אמת – מחיר + טורבו
+# שלב 2 – הצלבה עם מאגר משרד התחבורה
 # =============================
-def scrape_price_and_turbo_batch(models):
-    headers = {"Authorization": f"Bearer {FIRECRAWL_API_KEY}"}
-    enriched = {}
+def cross_check_with_mot(gemini_models, mot_file="car_models_israel_clean.csv"):
+    if not os.path.exists(mot_file):
+        st.error(f"❌ קובץ המאגר '{mot_file}' לא נמצא בתיקייה.")
+        return gemini_models
 
-    for m in models:
-        model_name = m["model"]
-        year = m.get("year", "")
+    df = pd.read_csv(mot_file)
+    df_models = df["model"].astype(str).str.lower().unique().tolist()
 
-        # חיפוש בגוגל (דרך Firecrawl) עם site:carzy
-        query = f'site:carzy.co.il "{model_name} {year} מחירון"'
-        search_payload = {"query": query, "num_results": 1}
-        try:
-            r = requests.post("https://api.firecrawl.dev/v1/search",
-                              headers=headers, json=search_payload, timeout=60)
-            results = r.json().get("results", [])
-            if not results:
-                enriched[model_name] = (None, None)
-                continue
+    checked = {}
+    for model, values in gemini_models.items():
+        model_name = model.split("(")[0].strip().lower()
+        if model_name in df_models:
+            checked[model] = values
+        else:
+            values["status"] = "excluded"
+            values["reason"] = "לא נמצא במאגר משרד התחבורה"
+            checked[model] = values
 
-            page_url = results[0]["url"]
-
-            # סקרייפינג של העמוד שנמצא
-            scrape_payload = {"url": page_url}
-            s = requests.post("https://api.firecrawl.dev/v1/scrape",
-                              headers=headers, json=scrape_payload, timeout=60)
-            text = s.json().get("text", "")
-
-            # Regex למציאת טווח מחירים
-            match = re.search(r"(\d{2},\d{3})[-–](\d{2},\d{3})", text)
-            price = f"{match.group(1)}–{match.group(2)} ₪" if match else None
-
-            # בדיקת טורבו
-            turbo = 1 if ("טורבו" in text or "TURBO" in text) else 0
-
-            enriched[model_name] = (price, turbo)
-
-        except Exception as e:
-            st.warning(f"⚠️ שגיאת סקרייפר בזמן אמת לדגם {model_name}: {e}")
-            enriched[model_name] = (None, None)
-
-    return enriched
+    return checked
 
 # =============================
-# אימותים
+# שלב 3 – Debug + סינון תקציב
 # =============================
-def verify_model_in_mot(df, model_name):
-    return any(df["model"].astype(str).str.contains(model_name, case=False, na=False))
+def debug_and_filter(params_data, budget_min, budget_max):
+    results = {}
+    lower_limit = budget_min * 0.9
+    upper_limit = budget_max * 1.1
 
-def verify_budget(price_range, budget_min, budget_max):
-    if not price_range:
-        return False
+    st.subheader("🔎 Debug – בדיקת דגמים מול כל החוקים")
+    st.write(f"גבולות תקציב לאחר סטייה: {lower_limit} – {upper_limit}")
 
-    # טווח תקציב עם חריגה ±13%
-    budget_min_eff = budget_min * 0.87
-    budget_max_eff = budget_max * 1.13
+    if not params_data:
+        st.warning("⚠️ Gemini לא החזיר בכלל דגמים")
+        return {}
 
-    nums = [re.sub(r"[^\d]", "", x) for x in price_range.replace("–","-").split("-")]
-    nums = [int(x) for x in nums if x.isdigit()]
-    if len(nums) != 2:
-        return False
+    for model, values in params_data.items():
+        price_text = str(values.get("price_range", "")).lower()
+        status = values.get("status", "unknown")
+        reason = values.get("reason", "")
 
-    min_price, max_price = min(nums), max(nums)
-    return not (max_price < budget_min_eff or min_price > budget_max_eff)
+        # חילוץ מספרים מהמחיר
+        nums = []
+        for match in re.findall(r"\d[\d,]*", price_text):
+            try:
+                nums.append(int(match.replace(",", "").replace("₪","")))
+            except:
+                pass
+
+        if "אלף" in price_text:
+            try:
+                k = int(re.search(r"(\d+)", price_text).group(1))
+                if k < 1000:
+                    nums.append(k * 1000)
+            except:
+                pass
+
+        if "k" in price_text:
+            try:
+                k = int(re.search(r"(\d+)", price_text).group(1))
+                nums.append(k * 1000)
+            except:
+                pass
+
+        nums = sorted(set(nums))
+
+        # בדיקת תקציב
+        in_budget = False
+        chosen_val = None
+        for n in nums:
+            if lower_limit <= n <= upper_limit:
+                in_budget = True
+                chosen_val = n
+                break
+
+        if status == "included" and in_budget:
+            results[model] = values
+            results[model]["_calculated_price"] = chosen_val
+            st.write(f"✅ {model} → נכלל | סיבה: {reason} | מחיר: {price_text} → זוהה: {nums} → נבחר {chosen_val}")
+        else:
+            st.write(f"❌ {model} → נפסל | סיבה: {reason} | מחיר: {price_text} → זוהה: {nums}")
+
+    return results
+
+# =============================
+# שלב 4 – GPT מסכם ומדרג
+# =============================
+def final_recommendation_with_gpt(answers, params_data):
+    text = f"""
+    תשובות המשתמש:
+    {answers}
+
+    נתוני פרמטרים:
+    {params_data}
+
+    צור סיכום בעברית:
+    - בחר עד 5 דגמים בלבד
+    - פרט יתרונות וחסרונות
+    - התייחס לכל 10 הפרמטרים (ביטוח, רישוי, תחזוקה, אמינות, צריכת דלק, ירידת ערך וכו’)
+    - הסבר למה הדגמים הכי מתאימים
+    """
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": text}],
+        temperature=0.4,
+    )
+    return response.choices[0].message.content
+
+# =============================
+# פונקציית לוג
+# =============================
+def save_log(answers, params_data, summary, filename="car_advisor_logs.csv"):
+    record = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "answers": json.dumps(answers, ensure_ascii=False),
+        "params_data": json.dumps(params_data, ensure_ascii=False),
+        "summary": summary,
+    }
+    if os.path.exists(filename):
+        existing = pd.read_csv(filename)
+        new_df = pd.DataFrame([record])
+        final = pd.concat([existing, new_df], ignore_index=True)
+    else:
+        final = pd.DataFrame([record])
+    final.to_csv(filename, index=False, encoding="utf-8-sig")
 
 # =============================
 # Streamlit UI
@@ -140,12 +268,14 @@ with st.form("car_form"):
     answers = {}
     answers["budget_min"] = int(st.text_input("תקציב מינימלי (₪)", "5000"))
     answers["budget_max"] = int(st.text_input("תקציב מקסימלי (₪)", "20000"))
-    answers["engine"] = st.radio("מנוע מועדף:", ["בנזין", "דיזל", "היברידי", "חשמלי"])
+
+    answers["engine"] = st.radio("מנוע מועדף:", ["בנזין", "דיזל", "היברידי-בנזין", "היברידי-דיזל", "חשמל"])
     answers["engine_cc_min"] = int(st.text_input("נפח מנוע מינימלי (סמ״ק):", "1200"))
     answers["engine_cc_max"] = int(st.text_input("נפח מנוע מקסימלי (סמ״ק):", "2000"))
     answers["year_min"] = st.text_input("שנת ייצור מינימלית:", "2000")
     answers["year_max"] = st.text_input("שנת ייצור מקסימלית:", "2020")
-    answers["car_type"] = st.selectbox("סוג רכב:", ["סדאן", "האצ'בק", "SUV", "מיני", "סופר מיני", "סטיישן", "טנדר", "משפחתי"])
+
+    answers["car_type"] = st.selectbox("סוג רכב:", ["סדאן", "האצ'בק", "SUV", "מיני", "סטיישן", "טנדר", "משפחתי"])
     answers["gearbox"] = st.radio("גיר:", ["לא משנה", "אוטומט", "ידני"])
     answers["turbo"] = st.radio("מנוע טורבו:", ["לא משנה", "כן", "לא"])
     answers["usage"] = st.radio("שימוש עיקרי:", ["עירוני", "בין-עירוני", "מעורב"])
@@ -159,63 +289,29 @@ with st.form("car_form"):
     answers["eco_pref"] = st.selectbox("שיקולי איכות סביבה:", ["חשוב רכב ירוק/חסכוני", "לא משנה"])
     answers["resale_value"] = st.selectbox("שמירת ערך עתידית:", ["חשוב לשמור על ערך", "פחות חשוב"])
     answers["extra"] = st.text_area("משהו נוסף שתרצה לציין?")
+
     submitted = st.form_submit_button("שלח וקבל המלצה")
 
 # =============================
 # טיפול אחרי שליחה
 # =============================
 if submitted:
-    st.write("📂 קבצים בתיקייה הנוכחית:", os.listdir("."))
+    with st.spinner("🌐 Gemini מייצר עד 20 דגמים עם פרמטרים..."):
+        gemini_models = gemini_propose_models(answers)
 
-    with st.spinner("🧠 GPT מחפש דגמים מתאימים..."):
-        models = fetch_models_with_gpt(answers)
-        st.write(f"🔎 GPT החזיר {len(models)} דגמים:")
-        st.json(models)
+    with st.spinner("📊 הצלבה מול מאגר משרד התחבורה..."):
+        checked_models = cross_check_with_mot(gemini_models)
 
-    with st.spinner("🌐 סקרייפר בודק מחירים וטורבו..."):
-        scraped_data = scrape_price_and_turbo_batch(models)
-        st.write("📊 נתוני סקרייפר:")
-        st.json(scraped_data)
+    filtered_models = debug_and_filter(checked_models, answers["budget_min"], answers["budget_max"])
+    if not filtered_models:
+        st.warning("⚠️ לא נמצאו רכבים מתאימים")
+        st.stop()
 
-    with st.spinner("✅ סינון קשיח..."):
-        try:
-            mot_df = pd.read_csv("car_models_israel_clean.csv")
-        except FileNotFoundError as e:
-            st.error("❌ קובץ car_models_israel_clean.csv לא נמצא. ודא שהוא באמת נמצא ב-GitHub ובאותה תיקייה של app.py")
-            raise e
+    with st.spinner("⚡ GPT מסכם ומדרג..."):
+        summary = final_recommendation_with_gpt(answers, filtered_models)
+        st.session_state["summary"] = summary
 
-        final_models = []
-        debug_log = []
-        for m in models:
-            model_name = m["model"]
-            reason = []
+    st.subheader("🔎 ההמלצה הסופית שלך")
+    st.write(st.session_state["summary"])
 
-            if not verify_model_in_mot(mot_df, model_name):
-                reason.append("❌ לא נמצא במאגר משרד התחבורה")
-
-            price, turbo_val = scraped_data.get(model_name, (None, None))
-            if not verify_budget(price, answers["budget_min"], answers["budget_max"]):
-                reason.append("❌ מחיר לא בתקציב (גם אחרי סטייה 13%)")
-
-            if answers["turbo"] != "לא משנה":
-                if (answers["turbo"] == "כן" and turbo_val == 0) or \
-                   (answers["turbo"] == "לא" and turbo_val == 1):
-                    reason.append("❌ לא עומד בדרישת טורבו")
-
-            if not reason:
-                m["price_range"] = price
-                m["turbo"] = turbo_val
-                final_models.append(m)
-                debug_log.append({model_name: "✅ עבר"})
-            else:
-                debug_log.append({model_name: reason})
-
-        st.write("📝 דוח סינון:")
-        st.json(debug_log)
-
-    if final_models:
-        df = pd.DataFrame(final_models)
-        st.subheader("📊 דגמים מתאימים")
-        st.dataframe(df, use_container_width=True)
-    else:
-        st.warning("⚠️ לא נמצאו דגמים מתאימים לתקציב והעדפות שלך.")
+    save_log(answers, filtered_models, st.session_state["summary"])
