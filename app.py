@@ -81,18 +81,29 @@ def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
     return df_filtered.to_dict(orient="records")
 
 # =============================
-# פונקציה חדשה – סינון לפי תקציב אחרי Gemini
+# פונקציה חדשה – סינון לפי תקציב עם חריגה ±10%
 # =============================
 def filter_by_budget(params_data, budget_min, budget_max):
     results = {}
+    lower_limit = budget_min * 0.9
+    upper_limit = budget_max * 1.1
+
     for model, values in params_data.items():
-        price_text = values.get("price_range", "")
+        price_text = str(values.get("price_range", ""))
         nums = [int(x.replace(",", "").replace("₪","")) for x in re.findall(r"\d[\d,]*", price_text)]
+
         if not nums:
             continue
-        avg_price = sum(nums) / len(nums)
-        if budget_min <= avg_price <= budget_max:
+
+        # אם יש טווח מחירים – ניקח ממוצע, אם יש רק מספר אחד – ניקח אותו
+        if len(nums) >= 2:
+            avg_price = (nums[0] + nums[1]) / 2
+        else:
+            avg_price = nums[0]
+
+        if lower_limit <= avg_price <= upper_limit:
             results[model] = values
+
     return results
 
 # =============================
