@@ -71,7 +71,6 @@ def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
 
     mask_year = df["year"].between(year_min, year_max, inclusive="both")
     mask_cc = df["engine_cc"].between(cc_min, cc_max, inclusive="both")
-
     mask_fuel = df["fuel"] == answers["engine"]
     mask_gear = (answers["gearbox"] == "לא משנה") | \
                 ((answers["gearbox"] == "אוטומט") & (df["automatic"] == 1)) | \
@@ -144,7 +143,7 @@ def filter_by_budget(params_data, budget_min, budget_max):
     return results
 
 # =============================
-# שלב 2א – Gemini מחזיר טווחי מחירים (עם לולאת כפייה)
+# שלב 2א – Gemini מחזיר טווחי מחירים (עם כל השאלון)
 # =============================
 def fetch_price_ranges(answers, verified_models, max_retries=5, wait_seconds=2):
     limited_models = verified_models[:20]
@@ -160,6 +159,17 @@ def fetch_price_ranges(answers, verified_models, max_retries=5, wait_seconds=2):
                 רשימת דגמים ממאגר משרד התחבורה (עד 20):
                 {limited_models}
 
+                עליך לבחור מהרשימה רק את הדגמים שתואמים להעדפות המשתמש:
+                - סוג רכב: {answers['car_type']}
+                - שימוש עיקרי: {answers['usage']}
+                - גיל נהג ראשי: {answers['driver_age']}
+                - תחזוקה מקסימלית: {answers['maintenance_budget']}
+                - מספר נוסעים: {answers['passengers']}
+                - אמינות מול נוחות: {answers['reliability_vs_comfort']}
+                - שיקולי איכות סביבה: {answers['eco_pref']}
+                - שמירת ערך עתידית: {answers['resale_value']}
+                - מנוע טורבו: {answers['turbo']}
+
                 עבור כל דגם החזר JSON בפורמט:
                 {{
                   "Model (year, engine, fuel)": {{
@@ -168,10 +178,10 @@ def fetch_price_ranges(answers, verified_models, max_retries=5, wait_seconds=2):
                 }}
 
                 חוקים:
-                - חובה להחזיר לפחות 5 דגמים.
-                - אם אין התאמות → בחר את הדגמים הקרובים ביותר לתנאים.
-                - החזר מספרים בלבד (לדוגמה: 55000–75000), בלי טקסטים, בלי מילים.
-                - אסור להמציא מחירים.
+                - חובה להתחשב בכל ההעדפות שניתנו.
+                - החזר לפחות 5 דגמים שמתאימים בצורה הטובה ביותר.
+                - אם אין התאמה מלאה → בחר את הקרובים ביותר.
+                - החזר מספרים בלבד (לדוגמה: 55000–75000), בלי טקסטים.
                 - אסור להחזיר טקסט חופשי – רק JSON חוקי.
                 """
             }]
@@ -187,7 +197,6 @@ def fetch_price_ranges(answers, verified_models, max_retries=5, wait_seconds=2):
 
         time.sleep(wait_seconds)
 
-    # fallback אם נכשל בכל הניסיונות
     return {}
 
 # =============================
