@@ -81,27 +81,29 @@ def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
     return df_filtered.to_dict(orient="records")
 
 # =============================
-# פונקציה חדשה – סינון לפי תקציב עם קצה תחתון (±10%)
+# פונקציה חדשה – סינון לפי תקציב (בודקת גם קצה תחתון וגם עליון)
 # =============================
 def filter_by_budget(params_data, budget_min, budget_max):
     results = {}
     lower_limit = budget_min * 0.9
     upper_limit = budget_max * 1.1
 
+    st.subheader("🔎 Debug – חישוב תקציב לרכבים")
+    st.write(f"גבולות תקציב לאחר סטייה: {lower_limit} – {upper_limit}")
+
     for model, values in params_data.items():
         price_text = str(values.get("price_range", "")).lower()
-
         nums = []
 
-        # 1. לתפוס מספרים רגילים (כולל טווחים עם מקף)
+        # 1. מספרים רגילים
         for match in re.findall(r"\d[\d,]*", price_text):
             try:
                 nums.append(int(match.replace(",", "").replace("₪","")))
             except:
                 pass
 
-        # 2. לתפוס "85 אלף" → 85000
-        if "אלף" in price_text and not nums:
+        # 2. "85 אלף"
+        if "אלף" in price_text:
             try:
                 k = int(re.search(r"(\d+)", price_text).group(1))
                 if k < 1000:
@@ -109,15 +111,34 @@ def filter_by_budget(params_data, budget_min, budget_max):
             except:
                 pass
 
+        # 3. "75k"
+        if "k" in price_text:
+            try:
+                k = int(re.search(r"(\d+)", price_text).group(1))
+                nums.append(k * 1000)
+            except:
+                pass
+
         if not nums:
+            st.write(f"{model} → לא נמצאו מספרים בפלט: {price_text}")
             continue
 
-        # לוקחים את הקצה התחתון של הטווח
-        price_val = min(nums)
+        nums = sorted(set(nums))
+        in_budget = False
+        chosen_val = None
 
-        if lower_limit <= price_val <= upper_limit:
+        for n in nums:
+            if lower_limit <= n <= upper_limit:
+                in_budget = True
+                chosen_val = n
+                break
+
+        if in_budget:
             results[model] = values
-            results[model]["_calculated_price"] = price_val  # לשקיפות
+            results[model]["_calculated_price"] = chosen_val
+            st.write(f"{model} → price_range: {price_text} → זוהה: {nums} → ✅ נכנס (נבחר {chosen_val})")
+        else:
+            st.write(f"{model} → price_range: {price_text} → זוהה: {nums} → ❌ מחוץ לתקציב")
 
     return results
 
