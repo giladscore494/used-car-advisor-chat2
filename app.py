@@ -64,28 +64,48 @@ def fetch_models_with_gpt(answers, retries=3):
     return []
 
 # =============================
-# סקרייפר – מחזיר מחיר וטורבו
+# סקרייפר בזמן אמת – מחיר + טורבו
 # =============================
 def scrape_price_and_turbo_batch(models):
-    url = "https://api.firecrawl.dev/v1/scrape"
-    query = " OR ".join([m["model"] for m in models])
-    payload = {"url": f"https://www.carzy.co.il/search?q={query}"}
     headers = {"Authorization": f"Bearer {FIRECRAWL_API_KEY}"}
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=120)
-        data = r.json().get("text", "")
-    except Exception as e:
-        st.warning(f"⚠️ שגיאת סקרייפר: {e}")
-        data = ""
-
     enriched = {}
+
     for m in models:
-        name = m["model"]
-        # Regex למציאת טווח מחירים
-        match = re.search(r"(\d{2},\d{3})[-–](\d{2},\d{3})", data)
-        price = f"{match.group(1)}–{match.group(2)} ₪" if match else None
-        turbo = 1 if ("טורבו" in data or "TURBO" in data) else 0
-        enriched[name] = (price, turbo)
+        model_name = m["model"]
+        year = m.get("year", "")
+
+        # חיפוש בגוגל (דרך Firecrawl) עם site:carzy
+        query = f'site:carzy.co.il "{model_name} {year} מחירון"'
+        search_payload = {"query": query, "num_results": 1}
+        try:
+            r = requests.post("https://api.firecrawl.dev/v1/search",
+                              headers=headers, json=search_payload, timeout=60)
+            results = r.json().get("results", [])
+            if not results:
+                enriched[model_name] = (None, None)
+                continue
+
+            page_url = results[0]["url"]
+
+            # סקרייפינג של העמוד שנמצא
+            scrape_payload = {"url": page_url}
+            s = requests.post("https://api.firecrawl.dev/v1/scrape",
+                              headers=headers, json=scrape_payload, timeout=60)
+            text = s.json().get("text", "")
+
+            # Regex למציאת טווח מחירים
+            match = re.search(r"(\d{2},\d{3})[-–](\d{2},\d{3})", text)
+            price = f"{match.group(1)}–{match.group(2)} ₪" if match else None
+
+            # בדיקת טורבו
+            turbo = 1 if ("טורבו" in text or "TURBO" in text) else 0
+
+            enriched[model_name] = (price, turbo)
+
+        except Exception as e:
+            st.warning(f"⚠️ שגיאת סקרייפר בזמן אמת לדגם {model_name}: {e}")
+            enriched[model_name] = (None, None)
+
     return enriched
 
 # =============================
