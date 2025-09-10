@@ -3,7 +3,6 @@ import re
 import json
 import requests
 import datetime
-import time
 import streamlit as st
 import pandas as pd
 from openai import OpenAI
@@ -48,164 +47,113 @@ def parse_gemini_json(answer):
     try:
         return json.loads(cleaned)
     except Exception:
-        return {}
+        return []
 
 # =============================
-# שלב 1 – Gemini מייצר עד 20 דגמים
+# שלב 1 – סינון ראשוני מול מאגר משרד התחבורה
 # =============================
-def gemini_propose_models(answers, max_retries=5, wait_seconds=2):
-    base_prompt = f"""
-    המשתמש נתן את ההעדפות הבאות:
-    {answers}
-
-    המשימה שלך: הצע עד 20 דגמים שמתאימים לשאלון. 
-    כל דגם חייב להיות מוחזר בפורמט JSON עם כל הפרמטרים.
-
-    עבור כל דגם החזר JSON בפורמט:
-    {{
-      "Model (year, engine, fuel)": {{
-         "price_range": "טווח מחירון ביד שנייה בישראל (₪)",
-         "availability": "זמינות בישראל",
-         "insurance_total": "עלות ביטוח חובה + צד ג' (₪)",
-         "license_fee": "אגרת רישוי/טסט שנתית (₪)",
-         "maintenance": "תחזוקה שנתית ממוצעת (₪)",
-         "common_issues": "תקלות נפוצות",
-         "fuel_consumption": "צריכת דלק אמיתית (ק״מ לליטר)",
-         "depreciation": "ירידת ערך ממוצעת (%)",
-         "safety": "דירוג בטיחות (כוכבים)",
-         "parts_availability": "זמינות חלפים בישראל",
-         "turbo": 0/1,
-         "status": "included/excluded",
-         "reason": "הסבר קצר למה נכלל או נפסל"
-      }}
-    }}
-
-    חוקים:
-    - החזר לפחות 5 דגמים (ועד 20).
-    - חובה להתחשב בכל ההעדפות שניתנו.
-    - החזר מספרים בלבד בטווח המחיר (למשל: 25000-35000).
-    - אסור להחזיר טקסט חופשי – רק JSON חוקי.
-    """
-
-    payload = {"contents": [{"role": "user", "parts": [{"text": base_prompt}]}]}
-
-    for attempt in range(max_retries):
-        answer = safe_gemini_call(payload)
-        st.write(f"🔎 Gemini raw output (נסיון {attempt+1}):", answer)  # Debug raw
-
-        parsed = parse_gemini_json(answer)
-        if parsed and isinstance(parsed, dict) and len(parsed) >= 1:
-            return parsed
-
-        # מוסיפים הוראה מחמירה לפרומפט
-        payload["contents"][0]["parts"][0]["text"] += "\n⚠️ החזרת פלט לא חוקי. החזר שוב JSON חוקי בלבד, בלי טקסט נוסף."
-
-        time.sleep(wait_seconds)
-
-    return {}
-
-# =============================
-# שלב 2 – הצלבה עם מאגר משרד התחבורה
-# =============================
-def cross_check_with_mot(gemini_models, mot_file="car_models_israel_clean.csv"):
+def filter_with_mot(answers, mot_file="car_models_israel.csv"):
     if not os.path.exists(mot_file):
-        st.error(f"❌ קובץ המאגר '{mot_file}' לא נמצא בתיקייה.")
-        return gemini_models
+        st.error(f"❌ קובץ המאגר '{mot_file}' לא נמצא בתיקייה. ודא שהעלית אותו.")
+        return []
 
     df = pd.read_csv(mot_file)
-    df_models = df["model"].astype(str).str.lower().unique().tolist()
 
-    checked = {}
-    for model, values in gemini_models.items():
-        model_name = model.split("(")[0].strip().lower()
-        if model_name in df_models:
-            checked[model] = values
-        else:
-            values["status"] = "excluded"
-            values["reason"] = "לא נמצא במאגר משרד התחבורה"
-            checked[model] = values
+    # המרות בטוחות
+    for col in ["year", "engine_cc"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    return checked
+    year_min = int(answers["year_min"])
+    year_max = int(answers["year_max"])
+    cc_min = int(answers["engine_cc_min"])
+    cc_max = int(answers["engine_cc_max"])
 
-# =============================
-# שלב 3 – Debug + סינון תקציב
-# =============================
-def debug_and_filter(params_data, budget_min, budget_max):
-    results = {}
-    lower_limit = budget_min * 0.9
-    upper_limit = budget_max * 1.1
+    mask_year = df["year"].between(year_min, year_max, inclusive="both")
+    mask_cc = df["engine_cc"].between(cc_min, cc_max, inclusive="both")
 
-    st.subheader("🔎 Debug – בדיקת דגמים מול כל החוקים")
-    st.write(f"גבולות תקציב לאחר סטייה: {lower_limit} – {upper_limit}")
+    # סינון דלק פשוט – לשלב הנוכחי
+    mask_fuel = df["fuel"].astype(str).str.contains(answers["engine"], na=False)
 
-    if not params_data:
-        st.warning("⚠️ Gemini לא החזיר בכלל דגמים")
-        return {}
+    # סינון גיר
+    if answers["gearbox"] == "לא משנה":
+        mask_gear = True
+    elif answers["gearbox"] == "אוטומט":
+        mask_gear = df["automatic"] == 1
+    else:
+        mask_gear = df["automatic"] == 0
 
-    for model, values in params_data.items():
-        price_text = str(values.get("price_range", "")).lower()
-        status = values.get("status", "unknown")
-        reason = values.get("reason", "")
-
-        # חילוץ מספרים מהמחיר
-        nums = []
-        for match in re.findall(r"\d[\d,]*", price_text):
-            try:
-                nums.append(int(match.replace(",", "").replace("₪","")))
-            except:
-                pass
-
-        if "אלף" in price_text:
-            try:
-                k = int(re.search(r"(\d+)", price_text).group(1))
-                if k < 1000:
-                    nums.append(k * 1000)
-            except:
-                pass
-
-        if "k" in price_text:
-            try:
-                k = int(re.search(r"(\d+)", price_text).group(1))
-                nums.append(k * 1000)
-            except:
-                pass
-
-        nums = sorted(set(nums))
-
-        # בדיקת תקציב
-        in_budget = False
-        chosen_val = None
-        for n in nums:
-            if lower_limit <= n <= upper_limit:
-                in_budget = True
-                chosen_val = n
-                break
-
-        if status == "included" and in_budget:
-            results[model] = values
-            results[model]["_calculated_price"] = chosen_val
-            st.write(f"✅ {model} → נכלל | סיבה: {reason} | מחיר: {price_text} → זוהה: {nums} → נבחר {chosen_val}")
-        else:
-            st.write(f"❌ {model} → נפסל | סיבה: {reason} | מחיר: {price_text} → זוהה: {nums}")
-
-    return results
+    df_filtered = df[mask_year & mask_cc & mask_fuel & mask_gear].copy()
+    return df_filtered.to_dict(orient="records")
 
 # =============================
-# שלב 4 – GPT מסכם ומדרג
+# שלב 2 – Gemini בונה טבלת 10 פרמטרים (סינון משלים)
+# =============================
+def fetch_models_10params(answers, verified_models):
+    payload = {
+        "contents": [{
+            "role": "user",
+            "parts": [{
+                "text": f"""
+                המשתמש נתן את ההעדפות הבאות:
+                {answers}
+
+                הנה רשימת רכבים שעברו סינון ראשוני ממאגר משרד התחבורה:
+                {verified_models}
+
+                כעת בצע סינון משלים לפי כל ההעדפות:
+                - סוג רכב: {answers['car_type']}
+                - מנוע טורבו: {answers['turbo']}
+                - שימוש עיקרי: {answers['usage']}
+                - גיל נהג: {answers['driver_age']}
+                - ותק רישיון: {answers['license_years']}
+                - עבר ביטוחי: {answers['insurance_history']}
+                - תקציב תחזוקה: {answers['maintenance_budget']}
+                - אמינות מול נוחות: {answers['reliability_vs_comfort']}
+                - שמירת ערך: {answers['resale_value']}
+                - שיקולי איכות סביבה: {answers['eco_pref']}
+                - תקציב כולל: {answers['budget_min']}–{answers['budget_max']} ₪
+
+                חשוב:
+                ❌ אל תחזיר שום דגם שלא עומד בכל הקריטריונים.
+                ✅ החזר אך ורק JSON תקני עם השדות:
+                {{
+                  "Model Name": {{
+                     "price_range": "טווח מחיר אמיתי כרכב משומש ביד 2 בישראל (₪, לא מחירון רשמי)",
+                     "availability": "זמינות בישראל",
+                     "insurance_total": "עלות ביטוח חובה + צד ג' (₪)",
+                     "license_fee": "אגרת רישוי/טסט שנתית (₪)",
+                     "maintenance": "תחזוקה שנתית ממוצעת (₪)",
+                     "common_issues": "תקלות נפוצות",
+                     "fuel_consumption": "צריכת דלק אמיתית (ק״מ לליטר)",
+                     "depreciation": "ירידת ערך ממוצעת (%)",
+                     "safety": "דירוג בטיחות (כוכבים)",
+                     "parts_availability": "זמינות חלפים בישראל"
+                  }}
+                }}
+                """
+            }]
+        }]
+    }
+    answer = safe_gemini_call(payload)
+    return parse_gemini_json(answer)
+
+# =============================
+# שלב 3 – GPT מסכם ומדרג
 # =============================
 def final_recommendation_with_gpt(answers, params_data):
     text = f"""
     תשובות המשתמש:
     {answers}
 
-    נתוני פרמטרים:
+    נתוני 10 פרמטרים:
     {params_data}
 
     צור סיכום בעברית:
-    - בחר עד 5 דגמים בלבד
+    - בחר את 5 הדגמים הטובים ביותר בלבד
     - פרט יתרונות וחסרונות
-    - התייחס לכל 10 הפרמטרים (ביטוח, רישוי, תחזוקה, אמינות, צריכת דלק, ירידת ערך וכו’)
-    - הסבר למה הדגמים הכי מתאימים
+    - התייחס לעלות ביטוח, תחזוקה, ירידת ערך וצריכת דלק
+    - הסבר למה הם הכי מתאימים למשתמש
     """
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -243,13 +191,18 @@ with st.form("car_form"):
     answers["budget_min"] = int(st.text_input("תקציב מינימלי (₪)", "5000"))
     answers["budget_max"] = int(st.text_input("תקציב מקסימלי (₪)", "20000"))
 
-    answers["engine"] = st.radio("מנוע מועדף:", ["בנזין", "דיזל", "היברידי-בנזין", "היברידי-דיזל", "חשמל"])
+    answers["engine"] = st.radio(
+        "מנוע מועדף:",
+        ["בנזין", "דיזל", "היברידי", "חשמלי"]
+    )
+
     answers["engine_cc_min"] = int(st.text_input("נפח מנוע מינימלי (סמ״ק):", "1200"))
     answers["engine_cc_max"] = int(st.text_input("נפח מנוע מקסימלי (סמ״ק):", "2000"))
+
     answers["year_min"] = st.text_input("שנת ייצור מינימלית:", "2000")
     answers["year_max"] = st.text_input("שנת ייצור מקסימלית:", "2020")
 
-    answers["car_type"] = st.selectbox("סוג רכב:", ["סדאן", "האצ'בק", "SUV", "מיני", "סטיישן", "טנדר", "משפחתי"])
+    answers["car_type"] = st.selectbox("סוג רכב:", ["סדאן", "האצ'בק", "SUV", "מיני", "סופר מיני", "סטיישן", "טנדר", "משפחתי"])
     answers["gearbox"] = st.radio("גיר:", ["לא משנה", "אוטומט", "ידני"])
     answers["turbo"] = st.radio("מנוע טורבו:", ["לא משנה", "כן", "לא"])
     answers["usage"] = st.radio("שימוש עיקרי:", ["עירוני", "בין-עירוני", "מעורב"])
@@ -270,22 +223,48 @@ with st.form("car_form"):
 # טיפול אחרי שליחה
 # =============================
 if submitted:
-    with st.spinner("🌐 Gemini מייצר עד 20 דגמים עם פרמטרים..."):
-        gemini_models = gemini_propose_models(answers)
+    with st.spinner("📊 סינון ראשוני מול מאגר משרד התחבורה..."):
+        verified_models = filter_with_mot(answers)
 
-    with st.spinner("📊 הצלבה מול מאגר משרד התחבורה..."):
-        checked_models = cross_check_with_mot(gemini_models)
+    with st.spinner("🌐 Gemini בונה טבלת 10 פרמטרים..."):
+        params_data = fetch_models_10params(answers, verified_models)
 
-    filtered_models = debug_and_filter(checked_models, answers["budget_min"], answers["budget_max"])
-    if not filtered_models:
-        st.warning("⚠️ לא נמצאו רכבים מתאימים")
-        st.stop()
+    try:
+        df_params = pd.DataFrame(params_data).T
+        st.session_state["df_params"] = df_params
+
+        st.subheader("🟩 טבלת 10 פרמטרים")
+        st.dataframe(df_params, use_container_width=True)
+
+    except Exception as e:
+        st.warning("⚠️ בעיה בנתוני JSON")
+        st.write(params_data)
 
     with st.spinner("⚡ GPT מסכם ומדרג..."):
-        summary = final_recommendation_with_gpt(answers, filtered_models)
+        summary = final_recommendation_with_gpt(answers, params_data)
         st.session_state["summary"] = summary
 
     st.subheader("🔎 ההמלצה הסופית שלך")
     st.write(st.session_state["summary"])
 
-    save_log(answers, filtered_models, st.session_state["summary"])
+    save_log(answers, params_data, st.session_state["summary"])
+
+# =============================
+# הורדת טבלה מה-session
+# =============================
+if "df_params" in st.session_state:
+    csv2 = st.session_state["df_params"].to_csv(index=True, encoding="utf-8-sig")
+    st.download_button("⬇️ הורד טבלת 10 פרמטרים", csv2, "params_data.csv", "text/csv")
+
+# =============================
+# כפתור הורדה של כל ההיסטוריה
+# =============================
+log_file = "car_advisor_logs.csv"
+if os.path.exists(log_file):
+    with open(log_file, "rb") as f:
+        st.download_button(
+            "⬇️ הורד את כל היסטוריית השאלונים",
+            f,
+            file_name="car_advisor_logs.csv",
+            mime="text/csv"
+        )
