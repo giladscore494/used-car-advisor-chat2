@@ -19,10 +19,10 @@ if not OPENAI_API_KEY or not FIRECRAWL_API_KEY:
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # =============================
-# GPT – בחירת 20 דגמים (ללא מחיר/טורבו)
+# GPT – בחירת 20 דגמים (לולאת ניסיון)
 # =============================
-def fetch_models_with_gpt(answers):
-    prompt = f"""
+def fetch_models_with_gpt(answers, retries=3):
+    base_prompt = f"""
     המשתמש הגדיר את ההעדפות הבאות:
     {answers}
 
@@ -35,37 +35,33 @@ def fetch_models_with_gpt(answers):
     - אם התקציב מעל 80 אלף ₪ → אפשר גם רכבים חדשים יחסית.
     - אסור בשום אופן להחזיר רכבים יקרים יותר מהתקציב בפועל.
 
-    אסור להחזיר מחיר או מידע על טורבו – זה ייבדק בנפרד.
-
-    החזר אך ורק JSON תקני במבנה:
-    [
-      {{
-        "model": "שם דגם",
-        "year_range": "שנות ייצור מתאימות",
-        "engine": "סוג מנוע",
-        "car_type": "סוג רכב",
-        "insurance": "עלות ביטוח משוערת",
-        "license_fee": "אגרת רישוי",
-        "maintenance": "תחזוקה שנתית משוערת",
-        "common_issues": "תקלות נפוצות",
-        "fuel_consumption": "צריכת דלק משוערת",
-        "depreciation": "ירידת ערך משוערת (%)",
-        "safety": "דירוג בטיחות",
-        "parts_availability": "זמינות חלפים",
-        "resale_value": "שמירת ערך"
-      }}
-    ]
+    ❌ אל תחזיר שום טקסט, הערה או הסבר.
+    ✅ החזר אך ורק JSON תקני במבנה רשימה של אובייקטים.
     """
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-    )
-    answer = response.choices[0].message.content
-    try:
-        return json.loads(re.search(r"\[.*\]", answer, re.S).group())
-    except Exception:
-        return []
+
+    for attempt in range(retries):
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": base_prompt}],
+            temperature=0.3,
+        )
+        answer = response.choices[0].message.content.strip()
+
+        # Debug: להציג פלט גולמי
+        st.write(f"📤 ניסיון {attempt+1}, פלט גולמי מ-GPT:")
+        st.text(answer)
+
+        try:
+            data = json.loads(re.search(r"\[.*\]", answer, re.S).group())
+            if isinstance(data, list) and len(data) > 0:
+                return data
+        except Exception:
+            pass
+
+        # אם נכשל, נחמיר את הפרומפט
+        base_prompt += "\n\n❌ התעלם מכל דבר אחר והחזר JSON בלבד, ללא טקסט נוסף."
+
+    return []
 
 # =============================
 # סקרייפר – מחזיר מחיר וטורבו
@@ -149,7 +145,6 @@ with st.form("car_form"):
 # טיפול אחרי שליחה
 # =============================
 if submitted:
-    # שלב 0: אילו קבצים קיימים
     st.write("📂 קבצים בתיקייה הנוכחית:", os.listdir("."))
 
     with st.spinner("🧠 GPT מחפש דגמים מתאימים..."):
