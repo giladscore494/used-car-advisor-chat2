@@ -3,6 +3,7 @@ import re
 import json
 import requests
 import datetime
+import time
 import streamlit as st
 import pandas as pd
 from openai import OpenAI
@@ -81,7 +82,7 @@ def filter_with_mot(answers, mot_file="car_models_israel_clean.csv"):
     return df_filtered.to_dict(orient="records")
 
 # =============================
-# פונקציה חדשה – סינון לפי תקציב (בודקת גם קצה תחתון וגם עליון)
+# פונקציה – סינון לפי תקציב (כולל Debug)
 # =============================
 def filter_by_budget(params_data, budget_min, budget_max):
     results = {}
@@ -143,9 +144,11 @@ def filter_by_budget(params_data, budget_min, budget_max):
     return results
 
 # =============================
-# שלב 2א – Gemini מחזיר רק טווחי מחירים
+# שלב 2א – Gemini מחזיר טווחי מחירים (עם לולאת כפייה)
 # =============================
-def fetch_price_ranges(answers, verified_models):
+def fetch_price_ranges(answers, verified_models, max_retries=5, wait_seconds=2):
+    limited_models = verified_models[:20]
+
     payload = {
         "contents": [{
             "role": "user",
@@ -154,8 +157,8 @@ def fetch_price_ranges(answers, verified_models):
                 המשתמש נתן את ההעדפות הבאות:
                 {answers}
 
-                רשימת דגמים ממאגר משרד התחבורה:
-                {verified_models}
+                רשימת דגמים ממאגר משרד התחבורה (עד 20):
+                {limited_models}
 
                 עבור כל דגם החזר JSON בפורמט:
                 {{
@@ -165,15 +168,27 @@ def fetch_price_ranges(answers, verified_models):
                 }}
 
                 חוקים:
-                - חובה להחזיר טווח מחירון אמיתי מהשוק הישראלי בלבד.
-                - אסור להמציא מחירים. אם לא ידוע → "לא ידוע".
-                - אל תוסיף דגמים חדשים.
+                - חובה להחזיר לפחות 5 דגמים.
+                - אם אין התאמות → בחר את הדגמים הקרובים ביותר לתנאים.
+                - החזר מספרים בלבד (לדוגמה: 55000–75000), בלי טקסטים, בלי מילים.
+                - אסור להמציא מחירים.
+                - אסור להחזיר טקסט חופשי – רק JSON חוקי.
                 """
             }]
         }]
     }
-    answer = safe_gemini_call(payload)
-    return parse_gemini_json(answer)
+
+    for attempt in range(max_retries):
+        answer = safe_gemini_call(payload)
+        parsed = parse_gemini_json(answer)
+
+        if parsed and isinstance(parsed, dict) and len(parsed) >= 1:
+            return parsed  # ✅ ברגע שקיבלנו JSON טוב – ממשיכים
+
+        time.sleep(wait_seconds)
+
+    # fallback אם נכשל בכל הניסיונות
+    return {}
 
 # =============================
 # שלב 2ב – Gemini מחזיר פרמטרים מלאים
