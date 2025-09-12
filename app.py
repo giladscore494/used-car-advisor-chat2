@@ -1,4 +1,4 @@
-google.generativeaimport os
+import os
 import json
 import pandas as pd
 import streamlit as st
