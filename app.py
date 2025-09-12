@@ -313,14 +313,29 @@ if submitted:
                 luxury = specs.get("luxury", brand_data.get("luxury", False))
                 popular = specs.get("popular", brand_data.get("popular", False))
 
-                calc_price = calculate_price(base_price_new, year, category, reliability, demand, fuel_eff)
+                = calculate_price(base_price_new, year, category, reliability, demand, fuel_eff)
 
                 # סינון קשיח עם חריגה של ±12%
                 lower_bound = budget_min * 0.88
                 upper_bound = budget_max * 1.12
-                if not (lower_bound <= calc_price <= upper_bound):
+                if not (lower_bound <= <= upper_bound):
                     log_debug("Filtered out", {"car": car, "price": calc_price, "reason": "מחוץ לטווח"})
                     continue
+                    # סינון קשיח עם חריגה של ±12%
+lower_bound = budget_min * 0.88
+upper_bound = budget_max * 1.12
+
+if not (lower_bound <= calc_price <= upper_bound):
+    log_debug("Filtered out", {
+        "car": car,
+        "year": year,
+        "calc_price": calc_price,
+        "lower_bound": lower_bound,
+        "upper_bound": upper_bound,
+        "reason": "מחוץ לטווח"
+    })
+    continue
+
 
                 results.append({
                     "דגם": model,
