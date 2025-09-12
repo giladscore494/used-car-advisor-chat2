@@ -100,8 +100,9 @@ def log_debug(step, data):
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 # --- GPT: בחירת דגמים ---
+# --- GPT: בחירת דגמים ---
 def ask_gpt_models(user_answers):
-   prompt = f"""
+    prompt = f"""
 אתה עוזר מומחה לרכבים בישראל.
 
 המטרה: להחזיר עד 15 דגמים אמיתיים שנמכרו בישראל בלבד שמתאימים לשאלון המשתמש.
@@ -135,12 +136,19 @@ def ask_gpt_models(user_answers):
   {{"model": "Mazda 3", "year": 2015, "engine_cc": 2000, "fuel": "בנזין", "gearbox": "ידני"}}
 ]
 """
-
     try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "אתה עוזר מומחה לרכבים."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3
+        )
         return json.loads(response.choices[0].message.content)
-    except Exception:
+    except Exception as e:
+        log_debug("GPT Error", str(e))
         return []
-
 # --- Gemini: בקשה אחת לכל הדגמים ---
 # --- GPT: בחירת דגמים ---
 def ask_gpt_models(user_answers):
