@@ -24,8 +24,8 @@ BRAND_DICT = {
     "Kia": {"brand_country": "קוריאה", "reliability": "בינונית", "demand": "גבוה", "luxury": False, "popular": True},
     "Suzuki": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "בינוני", "luxury": False, "popular": True},
     "Honda": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "בינוני", "luxury": False, "popular": True},
-    "Chevrolet": {"brand_country": "ארה״ב", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False},
-    "Ford": {"brand_country": "ארה״ב", "reliability": "בינונית", "demand": "בינוני", "luxury": False, "popular": True},
+    "Chevrolet": {"brand_country": "ארה\"ב", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False},
+    "Ford": {"brand_country": "ארה\"ב", "reliability": "בינונית", "demand": "בינוני", "luxury": False, "popular": True},
     "Skoda": {"brand_country": "צ׳כיה", "reliability": "בינונית", "demand": "גבוה", "luxury": False, "popular": True},
     "Seat": {"brand_country": "ספרד", "reliability": "בינונית", "demand": "בינוני", "luxury": False, "popular": True},
     "Volkswagen": {"brand_country": "גרמניה", "reliability": "בינונית", "demand": "גבוה", "luxury": False, "popular": True},
@@ -40,17 +40,17 @@ BRAND_DICT = {
     "Volvo": {"brand_country": "שוודיה", "reliability": "גבוהה", "demand": "בינוני", "luxury": True, "popular": True},
     "Jaguar": {"brand_country": "בריטניה", "reliability": "נמוכה", "demand": "נמוך", "luxury": True, "popular": False},
     "Land Rover": {"brand_country": "בריטניה", "reliability": "נמוכה", "demand": "נמוך", "luxury": True, "popular": False},
-    "Jeep": {"brand_country": "ארה״ב", "reliability": "בינונית", "demand": "בינוני", "luxury": False, "popular": True},
-    "Chrysler": {"brand_country": "ארה״ב", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False},
-    "Dodge": {"brand_country": "ארה״ב", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False},
+    "Jeep": {"brand_country": "ארה\"ב", "reliability": "בינונית", "demand": "בינוני", "luxury": False, "popular": True},
+    "Chrysler": {"brand_country": "ארה\"ב", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False},
+    "Dodge": {"brand_country": "ארה\"ב", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False},
     "Alfa Romeo": {"brand_country": "איטליה", "reliability": "נמוכה", "demand": "נמוך", "luxury": True, "popular": False},
     "Mitsubishi": {"brand_country": "יפן", "reliability": "בינונית", "demand": "בינוני", "luxury": False, "popular": True},
     "Citroen": {"brand_country": "צרפת", "reliability": "בינונית", "demand": "בינוני", "luxury": False, "popular": True},
     "Mini": {"brand_country": "בריטניה", "reliability": "בינונית", "demand": "גבוה", "luxury": True, "popular": True},
     "Porsche": {"brand_country": "גרמניה", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True},
-    "Tesla": {"brand_country": "ארה״ב", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True},
+    "Tesla": {"brand_country": "ארה\"ב", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True},
     "Saab": {"brand_country": "שוודיה", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False},
-    "Cadillac": {"brand_country": "ארה״ב", "reliability": "בינונית", "demand": "נמוך", "luxury": True, "popular": False},
+    "Cadillac": {"brand_country": "ארה\"ב", "reliability": "בינונית", "demand": "נמוך", "luxury": True, "popular": False},
     "Infiniti": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "בינוני", "luxury": True, "popular": False},
     "Lexus": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True},
     "Acura": {"brand_country": "יפן", "reliability": "בינונית", "demand": "נמוך", "luxury": True, "popular": False},
@@ -100,7 +100,6 @@ def log_debug(step, data):
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 # --- GPT: בחירת דגמים ---
-# --- GPT: בחירת דגמים ---
 def ask_gpt_models(user_answers):
     prompt = f"""
 אתה עוזר מומחה לרכבים בישראל.
@@ -122,7 +121,7 @@ def ask_gpt_models(user_answers):
 שדות חובה לכל רכב:
 - "model" (שם יצרן + דגם)
 - "year" (שנה)
-- "engine_cc" (נפח מנוע בסמ"ק)
+- "engine_cc" (נפח מנוע בסמ\"ק)
 - "fuel" ("בנזין" / "דיזל" / "היברידי" / "חשמלי")
 - "gearbox" ("אוטומט" / "ידני")
 
@@ -149,56 +148,7 @@ def ask_gpt_models(user_answers):
     except Exception as e:
         log_debug("GPT Error", str(e))
         return []
-# --- Gemini: בקשה אחת לכל הדגמים ---
-# --- GPT: בחירת דגמים ---
-def ask_gpt_models(user_answers):
-    prompt = f"""
-אתה עוזר מומחה לרכבים בישראל.
 
-המטרה: להחזיר עד 15 דגמים אמיתיים שנמכרו בישראל בלבד שמתאימים לשאלון המשתמש.
-אסור להחזיר דגמים שלא שווקו בישראל.
-אסור טקסט חופשי, הערות או סימני ```.
-
-חוקי היגיון מחירים:
-- רכב ישן (2005–2010, עממי כמו Toyota Corolla / Hyundai Getz) כיום 5,000–40,000 ש"ח.
-- רכב 2011–2015, עממי → 20,000–60,000 ש"ח.
-- משפחתי 2016–2020 → 40,000–120,000 ש"ח.
-- משפחתי 2021+ → 70,000–180,000 ש"ח.
-- יוקרה 2010–2015 → 60,000–200,000 ש"ח.
-- יוקרה 2016+ → 150,000–500,000 ש"ח.
-- אין להציע רכב חדש לגמרי מתחת ל-50,000 ש"ח.
-- אין להציע רכב משנת 2005 ומטה במחיר מעל 100,000 ש"ח.
-
-שדות חובה לכל רכב:
-- "model" (שם יצרן + דגם)
-- "year" (שנה)
-- "engine_cc" (נפח מנוע בסמ"ק)
-- "fuel" ("בנזין" / "דיזל" / "היברידי" / "חשמלי")
-- "gearbox" ("אוטומט" / "ידני")
-
-קלט שאלון:
-{json.dumps(user_answers, ensure_ascii=False, indent=2)}
-
-פלט JSON:
-[
-  {{"model": "Toyota Corolla", "year": 2017, "engine_cc": 1600, "fuel": "בנזין", "gearbox": "אוטומט"}},
-  {{"model": "Hyundai i30", "year": 2016, "engine_cc": 1600, "fuel": "בנזין", "gearbox": "אוטומט"}},
-  {{"model": "Mazda 3", "year": 2015, "engine_cc": 2000, "fuel": "בנזין", "gearbox": "ידני"}}
-]
-"""
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "אתה עוזר מומחה לרכבים."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3
-        )
-        return json.loads(response.choices[0].message.content)
-    except Exception as e:
-        log_debug("GPT Error", str(e))
-        return []
 # --- Gemini: בקשה אחת לכל הדגמים ---
 def ask_gemini_specs_batch(cars):
     prompt = f"""
@@ -242,7 +192,6 @@ def ask_gemini_specs_batch(cars):
         log_debug("Gemini Error", str(e))
         return {}
 
-
 # --- ממשק משתמש ---
 st.title("🚗 Car-Advisor – יועץ רכבים חכם")
 
@@ -250,8 +199,8 @@ with st.form("user_form"):
     budget_min = st.number_input("תקציב מינימלי (₪)", 0, 300000, 20000)
     budget_max = st.number_input("תקציב מקסימלי (₪)", 0, 300000, 50000)
     fuel_pref = st.selectbox("מנוע מועדף:", ["בנזין", "דיזל", "היברידי", "חשמלי"])
-    engine_min = st.number_input("נפח מנוע מינימלי (סמ״ק)", 600, 5000, 1200)
-    engine_max = st.number_input("נפח מנוע מקסימלי (סמ״ק)", 600, 5000, 1800)
+    engine_min = st.number_input("נפח מנוע מינימלי (סמ\"ק)", 600, 5000, 1200)
+    engine_max = st.number_input("נפח מנוע מקסימלי (סמ\"ק)", 600, 5000, 1800)
     year_min = st.number_input("שנת ייצור מינימלית", 1990, 2025, 2010)
     year_max = st.number_input("שנת ייצור מקסימלית", 1990, 2025, 2020)
     body_type = st.selectbox("סוג רכב:", ["סדאן", "האצ׳בק", "סטיישן", "SUV", "מיניוואן", "קופה"])
@@ -261,8 +210,9 @@ with st.form("user_form"):
     driver_age = st.number_input("גיל הנהג הראשי:", 17, 80, 30)
     license_years = st.number_input("ותק רישיון נהיגה (בשנים):", 0, 60, 5)
     insurance_record = st.selectbox("עבר ביטוחי/תעבורתי:", ["ללא", "קל", "חמור"])
-    annual_km = st.number_input("נסועה שנתית (ק״מ):", 0, 100000, 15000)
+    annual_km = st.number_input("נסועה שנתית (ק\"מ):", 0, 100000, 15000)
     reliability_pref = st.selectbox("מה חשוב יותר?", ["אמינות מעל הכול", "חסכון בדלק", "שמירת ערך"])
+    debug_mode = st.checkbox("🔍 מצב דיבאג – הצג רכבים שנפסלו", value=False)
     submitted = st.form_submit_button("מצא רכבים")
 
 if submitted:
@@ -295,6 +245,8 @@ if submitted:
         gemini_data = ask_gemini_specs_batch(cars_for_prompt)
 
         results = []
+        filtered_out = []
+
         for car, specs in gemini_data.items():
             try:
                 brand = car.split()[0]
@@ -305,7 +257,6 @@ if submitted:
                 category = specs.get("category", "משפחתי")
                 fuel_eff = specs.get("fuel_efficiency", 14)
 
-                # פולבאק למילון אם נתון חסר
                 brand_data = BRAND_DICT.get(brand, {})
                 reliability = specs.get("reliability", brand_data.get("reliability", "בינונית"))
                 demand = specs.get("demand", brand_data.get("demand", "בינוני"))
@@ -313,29 +264,22 @@ if submitted:
                 luxury = specs.get("luxury", brand_data.get("luxury", False))
                 popular = specs.get("popular", brand_data.get("popular", False))
 
-                = calculate_price(base_price_new, year, category, reliability, demand, fuel_eff)
+                calc_price = calculate_price(base_price_new, year, category, reliability, demand, fuel_eff)
 
-                # סינון קשיח עם חריגה של ±12%
                 lower_bound = budget_min * 0.88
                 upper_bound = budget_max * 1.12
-                if not (lower_bound <= <= upper_bound):
-                    log_debug("Filtered out", {"car": car, "price": calc_price, "reason": "מחוץ לטווח"})
+                if not (lower_bound <= calc_price <= upper_bound):
+                    reason = {
+                        "דגם": model,
+                        "שנה": year,
+                        "מחיר שחושב": calc_price,
+                        "גבול תחתון": int(lower_bound),
+                        "גבול עליון": int(upper_bound),
+                        "סיבה": "מחוץ לטווח"
+                    }
+                    filtered_out.append(reason)
+                    log_debug("Filtered out", reason)
                     continue
-                    # סינון קשיח עם חריגה של ±12%
-lower_bound = budget_min * 0.88
-upper_bound = budget_max * 1.12
-
-if not (lower_bound <= calc_price <= upper_bound):
-    log_debug("Filtered out", {
-        "car": car,
-        "year": year,
-        "calc_price": calc_price,
-        "lower_bound": lower_bound,
-        "upper_bound": upper_bound,
-        "reason": "מחוץ לטווח"
-    })
-    continue
-
 
                 results.append({
                     "דגם": model,
@@ -347,7 +291,7 @@ if not (lower_bound <= calc_price <= upper_bound):
                     "ביקוש": demand,
                     "יוקרה": "כן" if luxury else "לא",
                     "פופולריות": "כן" if popular else "לא",
-                    "צריכת דלק (ק״מ/ל׳)": fuel_eff,
+                    "צריכת דלק (ק\"מ/ל׳)": fuel_eff,
                     "מדינת מותג": brand_country,
                 })
             except Exception as e:
@@ -359,3 +303,7 @@ if not (lower_bound <= calc_price <= upper_bound):
             st.dataframe(pd.DataFrame(results))
         else:
             st.warning("⚠️ לא נמצאו רכבים מתאימים לאחר חישוב מחיר.")
+
+        if debug_mode and filtered_out:
+            st.subheader("🔍 מצב דיבאג – רכבים שנפסלו")
+            st.dataframe(pd.DataFrame(filtered_out))
