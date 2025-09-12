@@ -16,7 +16,7 @@ gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 DATA_PATH = "car_models_israel_clean.csv"
 car_df = pd.read_csv(DATA_PATH)
 
-# --- מילון מותגים (50 חברות נפוצות בישראל) ---
+# --- מילון מותגים (50 נפוצים בישראל) ---
 BRAND_DICT = {
     "Toyota": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": False, "popular": True},
     "Hyundai": {"brand_country": "קוריאה", "reliability": "בינונית", "demand": "גבוה", "luxury": False, "popular": True},
@@ -92,6 +92,13 @@ def calculate_price(base_price_new, year, category, reliability, demand, fuel_ef
         price *= 0.95
     return max(round(price, -2), 2000)
 
+# --- לוג דיבוג ---
+def log_debug(step, data):
+    log_path = "car_advisor_logs.csv"
+    entry = {"timestamp": datetime.now().isoformat(), "step": step, "data": data}
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
 # --- GPT: בחירת דגמים ---
 def ask_gpt_models(user_answers):
     prompt = f"""
@@ -115,13 +122,6 @@ def ask_gpt_models(user_answers):
 
 קלט שאלון:
 {json.dumps(user_answers, ensure_ascii=False, indent=2)}
-
-פלט JSON:
-[
-  {{"model": "Toyota Corolla", "year": 2017, "engine_cc": 1600, "fuel": "בנזין", "gearbox": "אוטומט"}},
-  {{"model": "Hyundai i30", "year": 2016, "engine_cc": 1600, "fuel": "בנזין", "gearbox": "אוטומט"}},
-  {{"model": "Mazda 3", "year": 2015, "engine_cc": 2000, "fuel": "בנזין", "gearbox": "ידני"}}
-]
 """
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -152,20 +152,8 @@ def ask_gemini_specs_batch(cars):
 - popular (true/false)
 - fuel_efficiency (צריכת דלק בק״מ לליטר, מספר בלבד)
 
-חוקי היגיון למחירים:
-- מיני/סופר מיני: 70,000–120,000 ₪ בהשקה.
-- משפחתי: 110,000–150,000 ₪ בהשקה.
-- מנהלים/SUV: 150,000–300,000 ₪ בהשקה.
-- יוקרה: מעל 250,000 ₪ בהשקה.
-
 קלט:
 {json.dumps(cars, ensure_ascii=False, indent=2)}
-
-פלט JSON:
-{{
-  "Toyota Corolla 2017": {{"base_price_new": 132000, "category": "משפחתי", "brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": false, "popular": true, "fuel_efficiency": 15}},
-  "Hyundai i30 2016": {{"base_price_new": 118000, "category": "משפחתי", "brand_country": "קוריאה", "reliability": "בינונית", "demand": "גבוה", "luxury": false, "popular": true, "fuel_efficiency": 14}}
-}}
 """
     response = gemini_model.generate_content(prompt)
     raw = response.text.strip()
@@ -187,10 +175,15 @@ with st.form("user_form"):
     engine_max = st.number_input("נפח מנוע מקסימלי (סמ״ק)", 600, 5000, 1800)
     year_min = st.number_input("שנת ייצור מינימלית", 1990, 2025, 2010)
     year_max = st.number_input("שנת ייצור מקסימלית", 1990, 2025, 2020)
-    body_type = st.selectbox("סוג רכב:", ["סדאן", "האצ׳בק", "SUV", "מיני"])
+    body_type = st.selectbox("סוג רכב:", ["סדאן", "האצ׳בק", "סטיישן", "SUV", "מיניוואן", "קופה"])
     gearbox = st.selectbox("גיר:", ["לא משנה", "אוטומט", "ידני"])
+    turbo = st.selectbox("מנוע טורבו:", ["לא משנה", "כן", "לא"])
     use_case = st.selectbox("שימוש עיקרי:", ["עירוני", "בין-עירוני", "מעורב"])
-    reliability_pref = st.selectbox("מה חשוב יותר?", ["אמינות מעל הכול", "חסכון", "שמירת ערך"])
+    driver_age = st.number_input("גיל הנהג הראשי:", 17, 80, 30)
+    license_years = st.number_input("ותק רישיון נהיגה (בשנים):", 0, 60, 5)
+    insurance_record = st.selectbox("עבר ביטוחי/תעבורתי:", ["ללא", "קל", "חמור"])
+    annual_km = st.number_input("נסועה שנתית (ק״מ):", 0, 100000, 15000)
+    reliability_pref = st.selectbox("מה חשוב יותר?", ["אמינות מעל הכול", "חסכון בדלק", "שמירת ערך"])
     submitted = st.form_submit_button("מצא רכבים")
 
 if submitted:
@@ -204,7 +197,12 @@ if submitted:
         "year_max": year_max,
         "body_type": body_type,
         "gearbox": gearbox,
+        "turbo": turbo,
         "use_case": use_case,
+        "driver_age": driver_age,
+        "license_years": license_years,
+        "insurance_record": insurance_record,
+        "annual_km": annual_km,
         "priority": reliability_pref,
     }
 
@@ -228,16 +226,21 @@ if submitted:
                 category = specs.get("category", "משפחתי")
                 fuel_eff = specs.get("fuel_efficiency", 14)
 
+                # פולבאק למילון אם נתון חסר
                 brand_data = BRAND_DICT.get(brand, {})
-                reliability = brand_data.get("reliability", specs.get("reliability", "בינונית"))
-                demand = brand_data.get("demand", specs.get("demand", "בינוני"))
-                brand_country = brand_data.get("brand_country", specs.get("brand_country", "לא ידוע"))
-                luxury = brand_data.get("luxury", specs.get("luxury", False))
-                popular = brand_data.get("popular", specs.get("popular", False))
+                reliability = specs.get("reliability", brand_data.get("reliability", "בינונית"))
+                demand = specs.get("demand", brand_data.get("demand", "בינוני"))
+                brand_country = specs.get("brand_country", brand_data.get("brand_country", "לא ידוע"))
+                luxury = specs.get("luxury", brand_data.get("luxury", False))
+                popular = specs.get("popular", brand_data.get("popular", False))
 
                 calc_price = calculate_price(base_price_new, year, category, reliability, demand, fuel_eff)
 
-                if not (budget_min <= calc_price <= budget_max):
+                # סינון קשיח עם חריגה של ±12%
+                lower_bound = budget_min * 0.88
+                upper_bound = budget_max * 1.12
+                if not (lower_bound <= calc_price <= upper_bound):
+                    log_debug("Filtered out", {"car": car, "price": calc_price, "reason": "מחוץ לטווח"})
                     continue
 
                 results.append({
@@ -253,7 +256,8 @@ if submitted:
                     "צריכת דלק (ק״מ/ל׳)": fuel_eff,
                     "מדינת מותג": brand_country,
                 })
-            except Exception:
+            except Exception as e:
+                log_debug("Error parsing car", {"car": car, "error": str(e)})
                 continue
 
         if results:
@@ -261,8 +265,3 @@ if submitted:
             st.dataframe(pd.DataFrame(results))
         else:
             st.warning("⚠️ לא נמצאו רכבים מתאימים לאחר חישוב מחיר.")
-
-        # לוג
-        log_entry = {"timestamp": datetime.now().isoformat(), "answers": user_answers, "results": results}
-        with open("car_advisor_logs.csv", "a", encoding="utf-8") as f:
-            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
