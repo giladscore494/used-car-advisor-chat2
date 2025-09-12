@@ -199,6 +199,48 @@ def ask_gpt_models(user_answers):
     except Exception as e:
         log_debug("GPT Error", str(e))
         return []
+# --- Gemini: בקשה אחת לכל הדגמים ---
+def ask_gemini_specs_batch(cars):
+    prompt = f"""
+אתה מקבל רשימת רכבים בפורמט JSON.
+החזר JSON בלבד (אסור טקסט חופשי או סימני ```).
+
+לכל רכב החזר:
+- base_price_new (מחיר ההשקה בישראל בשקלים, מספר בלבד)
+- category ("מיני" / "סופר מיני" / "משפחתי" / "מנהלים" / "יוקרה" / "SUV" / "קופה" / "מיניוואן")
+- brand_country (מדינת מותג)
+- reliability ("גבוהה" / "בינונית" / "נמוכה")
+- demand ("גבוה" / "בינוני" / "נמוך")
+- luxury (true/false)
+- popular (true/false)
+- fuel_efficiency (צריכת דלק בק\"מ לליטר, מספר בלבד)
+
+קלט:
+{json.dumps(cars, ensure_ascii=False, indent=2)}
+
+דוגמה לפלט:
+{{
+  "Toyota Corolla 2017": {{
+    "base_price_new": 132000,
+    "category": "משפחתי",
+    "brand_country": "יפן",
+    "reliability": "גבוהה",
+    "demand": "גבוה",
+    "luxury": false,
+    "popular": true,
+    "fuel_efficiency": 15
+  }}
+}}
+"""
+    try:
+        response = gemini_model.generate_content(prompt)
+        raw = response.text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+        return json.loads(raw)
+    except Exception as e:
+        log_debug("Gemini Error", str(e))
+        return {}
 
 
 # --- ממשק משתמש ---
