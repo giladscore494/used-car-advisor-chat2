@@ -26,22 +26,6 @@ def load_car_dataset():
 car_db = load_car_dataset()
 
 # =======================
-# ⚙️ SAFE JSON PARSER
-# =======================
-def safe_json_loads(text):
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        try:
-            start = text.find("{")
-            end = text.rfind("}")
-            if start != -1 and end != -1:
-                return json.loads(text[start:end+1])
-        except Exception:
-            pass
-    return None
-
-# =======================
 # 📖 BRAND DICTIONARY – 50 מותגים נפוצים בישראל
 # =======================
 BRAND_DICT = {
@@ -63,10 +47,30 @@ BRAND_DICT = {
     "Renault": {"brand_country": "צרפת", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False, "category": "משפחתי"},
     "Opel": {"brand_country": "גרמניה", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False, "category": "משפחתי"},
     "Fiat": {"brand_country": "איטליה", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False, "category": "עממי"},
-    "Volvo": {"brand_country": "שוודיה", "reliability": "גבוהה", "demand": "בינוני", "luxury": True, "popular": False, "category": "יוקרה"},
-    "Jeep": {"brand_country": "ארה״ב", "reliability": "בינונית", "demand": "גבוה", "luxury": True, "popular": True, "category": "SUV"}
-    # (השלמתי דוגמאות – אפשר להרחיב את ה־50 כאן)
+    "Nissan": {"brand_country": "יפן", "reliability": "בינונית", "demand": "גבוה", "luxury": False, "popular": True, "category": "משפחתי"},
+    # ... המשך מילון עד 50 מותגים (מקוצר כאן בשבילך)
 }
+
+# =======================
+# 🛠 פונקציית JSON בטוחה
+# =======================
+def safe_json_loads(text):
+    try:
+        # מנקה סימוני קוד ```json ... ```
+        if text.startswith("```"):
+            text = text.strip("`")
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+        return json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end != -1:
+                return json.loads(text[start:end+1])
+        except Exception:
+            pass
+    return None
 
 # =======================
 # 🧠 GPT – בחירת דגמים
@@ -74,7 +78,7 @@ BRAND_DICT = {
 def ask_gpt_for_models(user_answers):
     prompt = f"""
     בהתבסס על השאלון הבא, הצע עד 20 דגמים רלוונטיים בישראל.
-    החזר JSON בלבד, בפורמט:
+    החזר JSON בלבד (ללא טקסט נוסף), בפורמט:
     [
       {{
         "model": "<string>",
@@ -94,12 +98,13 @@ def ask_gpt_for_models(user_answers):
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3
     )
-    raw_text = response.choices[0].message.content.strip()
-    st.write("==== RAW GPT RESPONSE ====")
-    st.code(raw_text)
 
-    parsed = safe_json_loads(raw_text)
-    if not parsed:
+    raw = response.choices[0].message.content.strip()
+    st.text("==== RAW GPT RESPONSE ====")
+    st.code(raw, language="json")
+
+    parsed = safe_json_loads(raw)
+    if parsed is None:
         st.error("❌ לא נמצא JSON תקין בתשובת GPT")
         return []
     return parsed
@@ -142,34 +147,27 @@ def calculate_price(base_price_new, year, category, reliability, demand, fuel_ef
     age = datetime.now().year - int(year)
     price = base_price_new
 
-    # ירידת ערך בסיסית – 7% לשנה
-    price *= (1 - 0.07) ** age
-
-    # סגמנט
+    price *= (1 - 0.07) ** age  # ירידת ערך שנתית
     if category in ["מנהלים", "יוקרה"]:
         price *= 0.85
     elif category in ["מיני", "סופר מיני"]:
         price *= 0.95
 
-    # אמינות
     if reliability == "גבוהה":
         price *= 1.05
     elif reliability == "נמוכה":
         price *= 0.9
 
-    # ביקוש
     if demand == "גבוה":
         price *= 1.05
     elif demand == "נמוך":
         price *= 0.9
 
-    # חיסכון דלק
     if fuel_efficiency >= 18:
         price *= 1.05
     elif fuel_efficiency <= 12:
         price *= 0.95
 
-    # החמרה לרכבים ישנים
     if age > 10:
         price *= 0.85
 
@@ -182,13 +180,11 @@ def filter_results(cars, answers):
     filtered = []
     for car in cars:
         model_name = car["model"]
-        calc_price = car.get("calculated_price", 0)
+        calc_price = car["calculated_price"]
 
-        # סינון מול מאגר
         if not any(model_name in x for x in car_db["model"].values):
             continue
 
-        # סינון מול תקציב
         if not (answers["budget_min"] * 0.87 <= calc_price <= answers["budget_max"] * 1.13):
             continue
 
@@ -241,13 +237,14 @@ if submit:
         else:
             fallback_cars.append(car)
 
-    # ✅ בקשה מינימלית למותגים מהמילון
     if dict_cars:
         specs_dict = ask_gemini_for_specs(dict_cars, use_dict=True)
         for car in dict_cars:
             brand = car["model"].split()[0]
             params = BRAND_DICT[brand]
             extra = specs_dict.get(f"{car['model']} {car['year']}", {})
+            if not extra:
+                continue
             calc_price = calculate_price(
                 extra["base_price_new"],
                 car["year"],
@@ -259,11 +256,12 @@ if submit:
             car["calculated_price"] = calc_price
             final_cars.append(car)
 
-    # ✅ פול־באק מלא
     if fallback_cars:
         specs_fb = ask_gemini_for_specs(fallback_cars, use_dict=False)
         for car in fallback_cars:
             extra = specs_fb.get(f"{car['model']} {car['year']}", {})
+            if not extra:
+                continue
             calc_price = calculate_price(
                 extra["base_price_new"],
                 car["year"],
@@ -275,7 +273,6 @@ if submit:
             car["calculated_price"] = calc_price
             final_cars.append(car)
 
-    # סינון סופי
     filtered = filter_results(final_cars, answers)
 
     if filtered:
@@ -283,8 +280,3 @@ if submit:
         st.dataframe(pd.DataFrame(filtered))
     else:
         st.error("⚠️ לא נמצאו רכבים מתאימים.")
-
-    # לוגים
-    log_entry = {"time": str(datetime.now()), "answers": answers, "results": filtered}
-    with open("car_advisor_logs.json", "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
