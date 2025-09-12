@@ -26,7 +26,7 @@ def load_car_dataset():
 car_db = load_car_dataset()
 
 # =======================
-# 📖 BRAND DICTIONARY – 50 מותגים נפוצים בישראל
+# 📖 BRAND DICTIONARY – 50 מותגים
 # =======================
 BRAND_DICT = {
     "Toyota": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": False, "popular": True, "category": "משפחתי"},
@@ -44,33 +44,38 @@ BRAND_DICT = {
     "BMW": {"brand_country": "גרמניה", "reliability": "בינונית", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
     "Mercedes": {"brand_country": "גרמניה", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
     "Peugeot": {"brand_country": "צרפת", "reliability": "בינונית", "demand": "בינוני", "luxury": False, "popular": True, "category": "משפחתי"},
+    "Citroen": {"brand_country": "צרפת", "reliability": "נמוכה", "demand": "בינוני", "luxury": False, "popular": False, "category": "משפחתי"},
     "Renault": {"brand_country": "צרפת", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False, "category": "משפחתי"},
     "Opel": {"brand_country": "גרמניה", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False, "category": "משפחתי"},
-    "Fiat": {"brand_country": "איטליה", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False, "category": "עממי"},
+    "Mitsubishi": {"brand_country": "יפן", "reliability": "בינונית", "demand": "בינוני", "luxury": False, "popular": True, "category": "משפחתי"},
     "Nissan": {"brand_country": "יפן", "reliability": "בינונית", "demand": "גבוה", "luxury": False, "popular": True, "category": "משפחתי"},
-    # ... המשך מילון עד 50 מותגים (מקוצר כאן בשבילך)
+    "Subaru": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "בינוני", "luxury": False, "popular": False, "category": "משפחתי"},
+    "Volvo": {"brand_country": "שוודיה", "reliability": "גבוהה", "demand": "בינוני", "luxury": True, "popular": False, "category": "יוקרה"},
+    # ... המשך מילוי עד 50
 }
 
 # =======================
-# 🛠 פונקציית JSON בטוחה
+# 🗺️ MAP מותגים – עברית → אנגלית
 # =======================
-def safe_json_loads(text):
-    try:
-        # מנקה סימוני קוד ```json ... ```
-        if text.startswith("```"):
-            text = text.strip("`")
-            if text.lower().startswith("json"):
-                text = text[4:].strip()
-        return json.loads(text)
-    except json.JSONDecodeError:
-        try:
-            start = text.find("{")
-            end = text.rfind("}")
-            if start != -1 and end != -1:
-                return json.loads(text[start:end+1])
-        except Exception:
-            pass
-    return None
+BRAND_MAP = {
+    "יונדאי": "Hyundai",
+    "מאזדה": "Mazda",
+    "טויוטה": "Toyota",
+    "סוזוקי": "Suzuki",
+    "קיה": "Kia",
+    "פולקסווגן": "Volkswagen",
+    "ניסאן": "Nissan",
+    "שברולט": "Chevrolet",
+    "פיאט": "Fiat",
+    "סיאט": "Seat",
+    "אופל": "Opel",
+    "רנו": "Renault",
+    "פורד": "Ford",
+    "מיצובישי": "Mitsubishi",
+    "הונדה": "Honda",
+    "סובארו": "Subaru",
+    "וולוו": "Volvo",
+}
 
 # =======================
 # 🧠 GPT – בחירת דגמים
@@ -78,7 +83,7 @@ def safe_json_loads(text):
 def ask_gpt_for_models(user_answers):
     prompt = f"""
     בהתבסס על השאלון הבא, הצע עד 20 דגמים רלוונטיים בישראל.
-    החזר JSON בלבד (ללא טקסט נוסף), בפורמט:
+    החזר JSON בלבד, בפורמט:
     [
       {{
         "model": "<string>",
@@ -103,11 +108,10 @@ def ask_gpt_for_models(user_answers):
     st.text("==== RAW GPT RESPONSE ====")
     st.code(raw, language="json")
 
-    parsed = safe_json_loads(raw)
-    if parsed is None:
-        st.error("❌ לא נמצא JSON תקין בתשובת GPT")
+    try:
+        return json.loads(raw)
+    except:
         return []
-    return parsed
 
 # =======================
 # 🤖 GEMINI – השלמת נתונים
@@ -115,15 +119,15 @@ def ask_gpt_for_models(user_answers):
 def ask_gemini_for_specs(car_list, use_dict=True):
     if use_dict:
         prompt = f"""
-        החזר JSON עם המפתחות:
+        החזר JSON עם:
         - base_price_new
         - fuel_efficiency
-        עבור הדגמים הבאים:
+        עבור הדגמים:
         {json.dumps(car_list, ensure_ascii=False)}
         """
     else:
         prompt = f"""
-        החזר JSON עם המפתחות:
+        החזר JSON עם:
         - base_price_new
         - category
         - brand_country
@@ -132,13 +136,13 @@ def ask_gemini_for_specs(car_list, use_dict=True):
         - luxury
         - popular
         - fuel_efficiency
-        עבור הדגמים הבאים:
+        עבור הדגמים:
         {json.dumps(car_list, ensure_ascii=False)}
         """
 
     model = genai.GenerativeModel("gemini-1.5-flash")
     resp = model.generate_content(prompt)
-    return safe_json_loads(resp.text) or {}
+    return json.loads(resp.text)
 
 # =======================
 # 📉 נוסחת ירידת ערך
@@ -147,7 +151,8 @@ def calculate_price(base_price_new, year, category, reliability, demand, fuel_ef
     age = datetime.now().year - int(year)
     price = base_price_new
 
-    price *= (1 - 0.07) ** age  # ירידת ערך שנתית
+    price *= (1 - 0.07) ** age
+
     if category in ["מנהלים", "יוקרה"]:
         price *= 0.85
     elif category in ["מיני", "סופר מיני"]:
@@ -231,7 +236,10 @@ if submit:
     dict_cars, fallback_cars = [], []
 
     for car in gpt_models:
-        brand = car["model"].split()[0]
+        brand_he = car["model"].split()[0]
+        brand = BRAND_MAP.get(brand_he, brand_he)
+        car["brand"] = brand
+
         if brand in BRAND_DICT:
             dict_cars.append(car)
         else:
@@ -240,18 +248,16 @@ if submit:
     if dict_cars:
         specs_dict = ask_gemini_for_specs(dict_cars, use_dict=True)
         for car in dict_cars:
-            brand = car["model"].split()[0]
+            brand = car["brand"]
             params = BRAND_DICT[brand]
             extra = specs_dict.get(f"{car['model']} {car['year']}", {})
-            if not extra:
-                continue
             calc_price = calculate_price(
-                extra["base_price_new"],
+                extra.get("base_price_new", 100000),
                 car["year"],
                 params["category"],
                 params["reliability"],
                 params["demand"],
-                extra["fuel_efficiency"]
+                extra.get("fuel_efficiency", 14)
             )
             car["calculated_price"] = calc_price
             final_cars.append(car)
@@ -260,15 +266,13 @@ if submit:
         specs_fb = ask_gemini_for_specs(fallback_cars, use_dict=False)
         for car in fallback_cars:
             extra = specs_fb.get(f"{car['model']} {car['year']}", {})
-            if not extra:
-                continue
             calc_price = calculate_price(
-                extra["base_price_new"],
+                extra.get("base_price_new", 100000),
                 car["year"],
-                extra["category"],
-                extra["reliability"],
-                extra["demand"],
-                extra["fuel_efficiency"]
+                extra.get("category", "משפחתי"),
+                extra.get("reliability", "בינונית"),
+                extra.get("demand", "בינוני"),
+                extra.get("fuel_efficiency", 14)
             )
             car["calculated_price"] = calc_price
             final_cars.append(car)
