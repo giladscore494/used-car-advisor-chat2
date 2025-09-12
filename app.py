@@ -26,7 +26,7 @@ def load_car_dataset():
 car_db = load_car_dataset()
 
 # =======================
-# 📖 BRAND DICTIONARY – 50 מותגים
+# 📖 BRAND DICTIONARY – חלקי
 # =======================
 BRAND_DICT = {
     "Toyota": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": False, "popular": True, "category": "משפחתי"},
@@ -36,11 +36,7 @@ BRAND_DICT = {
     "Honda": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "בינוני", "luxury": False, "popular": False, "category": "משפחתי"},
     "Ford": {"brand_country": "ארה״ב", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False, "category": "משפחתי"},
     "Volkswagen": {"brand_country": "גרמניה", "reliability": "בינונית", "demand": "גבוה", "luxury": True, "popular": True, "category": "משפחתי"},
-    "Audi": {"brand_country": "גרמניה", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
-    "BMW": {"brand_country": "גרמניה", "reliability": "בינונית", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
-    "Mercedes": {"brand_country": "גרמניה", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
-    "Suzuki": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": False, "popular": True, "category": "סופר מיני"},
-    # ... (תשלים כאן את כל 50 המותגים כמו בקוד הקודם שלך)
+    # ... תשלים עוד מותגים
 }
 
 # =======================
@@ -74,18 +70,18 @@ def ask_gpt_for_models(user_answers, max_retries=5):
             raw = response.choices[0].message.content.strip()
             st.text_area(f"==== RAW GPT RESPONSE (attempt {attempt+1}) ====", raw, height=200)
 
-            # ניקוי ```json
             if raw.startswith("```"):
                 raw = raw.strip("```json").strip("```").strip()
-
             models = json.loads(raw)
+            st.success(f"✅ GPT החזיר JSON תקין ({len(models)} רכבים)")
             return models
         except Exception as e:
             st.warning(f"⚠️ GPT ניסיון {attempt+1} נכשל: {e}")
+    st.error("❌ GPT נכשל בכל הניסיונות")
     return []
 
 # =======================
-# 🤖 GEMINI – השלמת נתונים עם לולאה
+# 🤖 GEMINI – השלמת נתונים עם grounding
 # =======================
 def ask_gemini_for_specs(car_list, use_dict=True, max_retries=5):
     if not car_list:
@@ -93,7 +89,8 @@ def ask_gemini_for_specs(car_list, use_dict=True, max_retries=5):
 
     if use_dict:
         prompt_template = """
-        החזר JSON במבנה הבא בלבד:
+        מצא את *מחיר ההשקה בישראל* לשנתון ואת צריכת הדלק הממוצעת.
+        החזר JSON במבנה:
         {{
           "<model> <year>": {{
             "base_price_new": <int>,
@@ -105,7 +102,8 @@ def ask_gemini_for_specs(car_list, use_dict=True, max_retries=5):
         """
     else:
         prompt_template = """
-        החזר JSON במבנה הבא בלבד:
+        מצא את *מחיר ההשקה בישראל* לשנתון, ופרטים נוספים.
+        החזר JSON במבנה:
         {{
           "<model> <year>": {{
             "base_price_new": <int>,
@@ -127,20 +125,18 @@ def ask_gemini_for_specs(car_list, use_dict=True, max_retries=5):
     for attempt in range(max_retries):
         try:
             prompt = prompt_template.format(cars=json.dumps(car_list, ensure_ascii=False))
-            resp = model.generate_content(prompt)
+            resp = model.generate_content(prompt, tools={"grounding": {}})
             raw = resp.text.strip()
             st.text_area(f"==== RAW GEMINI RESPONSE (attempt {attempt+1}) ====", raw, height=200)
 
             if raw.startswith("```"):
                 raw = raw.strip("```json").strip("```").strip()
-
             specs = json.loads(raw)
             st.success(f"✅ Gemini החזיר JSON תקין בניסיון {attempt+1}")
             return specs
         except Exception as e:
             st.warning(f"⚠️ Gemini ניסיון {attempt+1} נכשל: {e}")
 
-    # ===== פולבאק אחרי 5 כשלונות =====
     st.error("❌ Gemini נכשל 5 פעמים. משתמש בערכי ברירת מחדל.")
     specs = {}
     for car in car_list:
@@ -157,10 +153,11 @@ def ask_gemini_for_specs(car_list, use_dict=True, max_retries=5):
     return specs
 
 # =======================
-# 📉 נוסחת ירידת ערך
+# 📉 נוסחת ירידת ערך (עם debug)
 # =======================
 def calculate_price(base_price_new, year, category, reliability, demand, fuel_efficiency):
     age = datetime.now().year - int(year)
+    st.write(f"📉 חישוב ירידת ערך: base={base_price_new}, year={year}, age={age}, cat={category}, rel={reliability}, demand={demand}, eff={fuel_efficiency}")
     price = base_price_new
     price *= (1 - 0.07) ** age
     if category in ["מנהלים", "יוקרה"]:
@@ -184,20 +181,19 @@ def calculate_price(base_price_new, year, category, reliability, demand, fuel_ef
     return round(price, -2)
 
 # =======================
-# 🔎 סינון
+# 🔎 סינון (עם debug)
 # =======================
 def filter_results(cars, answers):
+    st.write(f"🔎 לפני סינון: {len(cars)} רכבים")
     filtered = []
     for car in cars:
-        model_name = car["model"]
         calc_price = car.get("calculated_price")
         if calc_price is None:
-            continue
-        if not any(model_name in x for x in car_db["model"].values):
             continue
         if not (answers["budget_min"] * 0.87 <= calc_price <= answers["budget_max"] * 1.13):
             continue
         filtered.append(car)
+    st.write(f"🔎 אחרי סינון: {len(filtered)} רכבים")
     return filtered
 
 # =======================
@@ -245,14 +241,13 @@ if submit:
         else:
             fallback_cars.append(car)
 
-    # ✅ מותגים מהמילון
     if dict_cars:
         specs_dict = ask_gemini_for_specs(dict_cars, use_dict=True)
         for car in dict_cars:
             brand = car["model"].split()[0]
             params = BRAND_DICT[brand]
             extra = specs_dict.get(f"{car['model']} {car['year']}", {})
-            calc_price = calculate_price(
+            car["calculated_price"] = calculate_price(
                 extra.get("base_price_new", 100000),
                 car["year"],
                 params["category"],
@@ -260,15 +255,13 @@ if submit:
                 params["demand"],
                 extra.get("fuel_efficiency", 14)
             )
-            car["calculated_price"] = calc_price
             final_cars.append(car)
 
-    # ✅ פולבאק
     if fallback_cars:
         specs_fb = ask_gemini_for_specs(fallback_cars, use_dict=False)
         for car in fallback_cars:
             extra = specs_fb.get(f"{car['model']} {car['year']}", {})
-            calc_price = calculate_price(
+            car["calculated_price"] = calculate_price(
                 extra.get("base_price_new", 100000),
                 car["year"],
                 extra.get("category", "משפחתיות"),
@@ -276,10 +269,8 @@ if submit:
                 extra.get("demand", "בינוני"),
                 extra.get("fuel_efficiency", 14)
             )
-            car["calculated_price"] = calc_price
             final_cars.append(car)
 
-    # סינון
     filtered = filter_results(final_cars, answers)
 
     if filtered:
