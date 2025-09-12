@@ -26,7 +26,7 @@ def load_car_dataset():
 car_db = load_car_dataset()
 
 # =======================
-# 📖 BRAND DICTIONARY
+# 📖 BRAND DICTIONARY – 50 מותגים
 # =======================
 BRAND_DICT = {
     "Toyota": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": False, "popular": True, "category": "משפחתי"},
@@ -35,27 +35,36 @@ BRAND_DICT = {
     "Kia": {"brand_country": "קוריאה", "reliability": "בינונית", "demand": "גבוה", "luxury": False, "popular": True, "category": "משפחתי"},
     "Honda": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "בינוני", "luxury": False, "popular": False, "category": "משפחתי"},
     "Ford": {"brand_country": "ארה״ב", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False, "category": "משפחתי"},
+    "Volkswagen": {"brand_country": "גרמניה", "reliability": "בינונית", "demand": "גבוה", "luxury": True, "popular": True, "category": "משפחתי"},
+    "Audi": {"brand_country": "גרמניה", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
+    "BMW": {"brand_country": "גרמניה", "reliability": "בינונית", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
+    "Mercedes": {"brand_country": "גרמניה", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
     "Suzuki": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": False, "popular": True, "category": "סופר מיני"},
-    # ... המשך המילון
+    # ... (תשלים כאן את כל 50 המותגים כמו בקוד הקודם שלך)
 }
 
 # =======================
 # 🧠 GPT – בחירת דגמים
 # =======================
-def ask_gpt_for_models(user_answers, retries=3):
+def ask_gpt_for_models(user_answers, max_retries=5):
     prompt = f"""
-    החזר אך ורק JSON תקני.
-    פורמט:
+    בהתבסס על השאלון הבא, הצע עד 20 דגמים רלוונטיים בישראל.
+    החזר JSON בלבד, בפורמט:
     [
-      {{"model": "Mazda 3", "year": 2014, "engine_cc": 1600, "fuel": "בנזין", "gearbox": "אוטומט"}},
-      ...
+      {{
+        "model": "<string>",
+        "year": <int>,
+        "engine_cc": <int>,
+        "fuel": "<string>",
+        "gearbox": "<string>"
+      }}
     ]
 
     שאלון:
     {json.dumps(user_answers, ensure_ascii=False)}
     """
 
-    for attempt in range(retries):
+    for attempt in range(max_retries):
         try:
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -63,89 +72,115 @@ def ask_gpt_for_models(user_answers, retries=3):
                 temperature=0.3
             )
             raw = response.choices[0].message.content.strip()
+            st.text_area(f"==== RAW GPT RESPONSE (attempt {attempt+1}) ====", raw, height=200)
+
+            # ניקוי ```json
             if raw.startswith("```"):
                 raw = raw.strip("```json").strip("```").strip()
-            return json.loads(raw)
+
+            models = json.loads(raw)
+            return models
         except Exception as e:
-            st.warning(f"❌ GPT ניסיון {attempt+1} נכשל: {e}")
+            st.warning(f"⚠️ GPT ניסיון {attempt+1} נכשל: {e}")
     return []
 
 # =======================
-# 🤖 GEMINI – השלמת נתונים
+# 🤖 GEMINI – השלמת נתונים עם לולאה
 # =======================
-def ask_gemini_for_specs(car_list, use_dict=True):
+def ask_gemini_for_specs(car_list, use_dict=True, max_retries=5):
     if not car_list:
         return {}
 
     if use_dict:
-        prompt = f"""
-        החזר JSON עם המפתחות:
-        - base_price_new (מספר או null)
-        - fuel_efficiency (מספר או null)
+        prompt_template = """
+        החזר JSON במבנה הבא בלבד:
+        {{
+          "<model> <year>": {{
+            "base_price_new": <int>,
+            "fuel_efficiency": <int>
+          }}
+        }}
         עבור:
-        {json.dumps(car_list, ensure_ascii=False)}
+        {cars}
         """
     else:
-        prompt = f"""
-        החזר JSON עם המפתחות:
-        - base_price_new (מספר או null)
-        - category
-        - brand_country
-        - reliability
-        - demand
-        - luxury
-        - popular
-        - fuel_efficiency (מספר או null)
+        prompt_template = """
+        החזר JSON במבנה הבא בלבד:
+        {{
+          "<model> <year>": {{
+            "base_price_new": <int>,
+            "category": "<string>",
+            "brand_country": "<string>",
+            "reliability": "<string>",
+            "demand": "<string>",
+            "luxury": <bool>,
+            "popular": <bool>,
+            "fuel_efficiency": <int>
+          }}
+        }}
         עבור:
-        {json.dumps(car_list, ensure_ascii=False)}
+        {cars}
         """
 
     model = genai.GenerativeModel("gemini-1.5-flash")
-    try:
-        resp = model.generate_content(prompt)
-        raw = resp.text.strip()
-        if raw.startswith("```"):
-            raw = raw.strip("```json").strip("```").strip()
-        return json.loads(raw)
-    except Exception as e:
-        st.error(f"❌ שגיאה בג׳מיני: {e}")
-        return {}
+
+    for attempt in range(max_retries):
+        try:
+            prompt = prompt_template.format(cars=json.dumps(car_list, ensure_ascii=False))
+            resp = model.generate_content(prompt)
+            raw = resp.text.strip()
+            st.text_area(f"==== RAW GEMINI RESPONSE (attempt {attempt+1}) ====", raw, height=200)
+
+            if raw.startswith("```"):
+                raw = raw.strip("```json").strip("```").strip()
+
+            specs = json.loads(raw)
+            st.success(f"✅ Gemini החזיר JSON תקין בניסיון {attempt+1}")
+            return specs
+        except Exception as e:
+            st.warning(f"⚠️ Gemini ניסיון {attempt+1} נכשל: {e}")
+
+    # ===== פולבאק אחרי 5 כשלונות =====
+    st.error("❌ Gemini נכשל 5 פעמים. משתמש בערכי ברירת מחדל.")
+    specs = {}
+    for car in car_list:
+        specs[f"{car['model']} {car['year']}"] = {
+            "base_price_new": 100000,
+            "fuel_efficiency": 14,
+            "category": "משפחתיות",
+            "brand_country": "לא ידוע",
+            "reliability": "בינונית",
+            "demand": "בינוני",
+            "luxury": False,
+            "popular": True
+        }
+    return specs
 
 # =======================
 # 📉 נוסחת ירידת ערך
 # =======================
 def calculate_price(base_price_new, year, category, reliability, demand, fuel_efficiency):
-    if base_price_new is None:
-        return None
-
     age = datetime.now().year - int(year)
     price = base_price_new
-
     price *= (1 - 0.07) ** age
     if category in ["מנהלים", "יוקרה"]:
         price *= 0.85
     elif category in ["מיני", "סופר מיני"]:
         price *= 0.95
-
     if reliability == "גבוהה":
         price *= 1.05
     elif reliability == "נמוכה":
         price *= 0.9
-
     if demand == "גבוה":
         price *= 1.05
     elif demand == "נמוך":
         price *= 0.9
-
-    if fuel_efficiency:
-        if fuel_efficiency >= 18:
-            price *= 1.05
-        elif fuel_efficiency <= 12:
-            price *= 0.95
-
+    if fuel_efficiency >= 18:
+        price *= 1.05
+    elif fuel_efficiency <= 12:
+        price *= 0.95
     if age > 10:
         price *= 0.85
-
     return round(price, -2)
 
 # =======================
@@ -154,8 +189,11 @@ def calculate_price(base_price_new, year, category, reliability, demand, fuel_ef
 def filter_results(cars, answers):
     filtered = []
     for car in cars:
+        model_name = car["model"]
         calc_price = car.get("calculated_price")
         if calc_price is None:
+            continue
+        if not any(model_name in x for x in car_db["model"].values):
             continue
         if not (answers["budget_min"] * 0.87 <= calc_price <= answers["budget_max"] * 1.13):
             continue
@@ -176,7 +214,7 @@ with st.form("car_form"):
     year_max = st.number_input("שנת ייצור מקסימלית", value=2020)
     fuel = st.selectbox("מנוע מועדף", ["בנזין", "דיזל", "היברידי", "חשמלי"])
     gearbox = st.selectbox("גיר", ["לא משנה", "אוטומט", "ידני"])
-    body_type = st.text_input("סוג רכב")
+    body_type = st.text_input("סוג רכב (למשל: סדאן, SUV, האצ׳בק)")
     reliability_pref = st.selectbox("מה חשוב יותר?", ["אמינות מעל הכול", "חיסכון בדלק", "שמירת ערך"])
     submit = st.form_submit_button("מצא רכבים")
 
@@ -196,10 +234,10 @@ if submit:
 
     st.info("📤 שולח בקשה ל־GPT...")
     gpt_models = ask_gpt_for_models(answers)
-    st.write("==== RAW GPT MODELS ====")
-    st.json(gpt_models)
 
-    final_cars, dict_cars, fallback_cars = [], [], []
+    final_cars = []
+    dict_cars, fallback_cars = [], []
+
     for car in gpt_models:
         brand = car["model"].split()[0]
         if brand in BRAND_DICT:
@@ -207,50 +245,42 @@ if submit:
         else:
             fallback_cars.append(car)
 
-    st.write(f"✅ במילון: {len(dict_cars)} | ⚠️ פולבאק: {len(fallback_cars)}")
-
+    # ✅ מותגים מהמילון
     if dict_cars:
         specs_dict = ask_gemini_for_specs(dict_cars, use_dict=True)
-        st.write("==== GEMINI RESPONSE (DICT) ====")
-        st.json(specs_dict)
         for car in dict_cars:
             brand = car["model"].split()[0]
             params = BRAND_DICT[brand]
             extra = specs_dict.get(f"{car['model']} {car['year']}", {})
             calc_price = calculate_price(
-                extra.get("base_price_new"),
+                extra.get("base_price_new", 100000),
                 car["year"],
                 params["category"],
                 params["reliability"],
                 params["demand"],
-                extra.get("fuel_efficiency")
+                extra.get("fuel_efficiency", 14)
             )
-            car.update(extra)
             car["calculated_price"] = calc_price
             final_cars.append(car)
 
+    # ✅ פולבאק
     if fallback_cars:
         specs_fb = ask_gemini_for_specs(fallback_cars, use_dict=False)
-        st.write("==== GEMINI RESPONSE (FALLBACK) ====")
-        st.json(specs_fb)
         for car in fallback_cars:
             extra = specs_fb.get(f"{car['model']} {car['year']}", {})
             calc_price = calculate_price(
-                extra.get("base_price_new"),
+                extra.get("base_price_new", 100000),
                 car["year"],
-                extra.get("category"),
-                extra.get("reliability"),
-                extra.get("demand"),
-                extra.get("fuel_efficiency")
+                extra.get("category", "משפחתיות"),
+                extra.get("reliability", "בינונית"),
+                extra.get("demand", "בינוני"),
+                extra.get("fuel_efficiency", 14)
             )
-            car.update(extra)
             car["calculated_price"] = calc_price
             final_cars.append(car)
 
+    # סינון
     filtered = filter_results(final_cars, answers)
-
-    st.write("==== AFTER PRICE CALCULATION ====")
-    st.json(final_cars)
 
     if filtered:
         st.success("✅ נמצאו רכבים מתאימים:")
