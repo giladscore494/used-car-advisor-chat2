@@ -2,20 +2,17 @@ import os
 import json
 import pandas as pd
 import streamlit as st
-import requests  # Added
 from datetime import datetime
 from openai import OpenAI
-# Removed: import google.generativeai as genai
+import requests
 
 # =======================
 # 🔑 API KEYS
 # =======================
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-# Removed: GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-# Removed: genai.configure(api_key=GEMINI_API_KEY)
 
 # =======================
 # 📂 LOAD DATA
@@ -28,7 +25,7 @@ def load_car_dataset():
 car_db = load_car_dataset()
 
 # =======================
-# 📖 BRAND DICTIONARY – חלקי
+# 📖 BRAND DICTIONARY – מותגים
 # =======================
 BRAND_DICT = {
     "Toyota": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": False, "popular": True, "category": "משפחתי"},
@@ -38,15 +35,11 @@ BRAND_DICT = {
     "Honda": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "בינוני", "luxury": False, "popular": False, "category": "משפחתי"},
     "Ford": {"brand_country": "ארה״ב", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False, "category": "משפחתי"},
     "Volkswagen": {"brand_country": "גרמניה", "reliability": "בינונית", "demand": "גבוה", "luxury": True, "popular": True, "category": "משפחתי"},
-    "Nissan": {"brand_country": "יפן", "reliability": "בינונית", "demand": "נמוך", "luxury": False, "popular": True, "category": "משפחתי"},
-    "Peugeot": {"brand_country": "צרפת", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False, "category": "משפחתי"},
-    "Skoda": {"brand_country": "צ'כיה", "reliability": "בינונית", "demand": "גבוה", "luxury": False, "popular": True, "category": "משפחתי"},
-    "Opel": {"brand_country": "גרמניה", "reliability": "בינונית", "demand": "בינוני", "luxury": False, "popular": False, "category": "משפחתי"},
-    "Renault": {"brand_country": "צרפת", "reliability": "בינונית", "demand": "בינוני", "luxury": False, "popular": False, "category": "משפחתי"},
-    "Subaru": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "בינוני", "luxury": False, "popular": False, "category": "משפחתי"},
-    "Seat": {"brand_country": "ספרד", "reliability": "בינונית", "demand": "בינוני", "luxury": False, "popular": False, "category": "משפחתי"},
-    "Citroen": {"brand_country": "צרפת", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False, "category": "משפחתי"},
-    "Mitsubishi": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "בינוני", "luxury": False, "popular": True, "category": "משפחתי"},
+    "Audi": {"brand_country": "גרמניה", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
+    "BMW": {"brand_country": "גרמניה", "reliability": "בינונית", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
+    "Mercedes": {"brand_country": "גרמניה", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
+    "Suzuki": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": False, "popular": True, "category": "סופר מיני"},
+    # אפשר להוסיף עוד...
 }
 
 # =======================
@@ -82,86 +75,72 @@ def ask_gpt_for_models(user_answers, max_retries=5):
 
             if raw.startswith("```"):
                 raw = raw.strip("```json").strip("```").strip()
+
             models = json.loads(raw)
-            st.success(f"✅ GPT החזיר JSON תקין ({len(models)} רכבים)")
             return models
         except Exception as e:
             st.warning(f"⚠️ GPT ניסיון {attempt+1} נכשל: {e}")
-    st.error("❌ GPT נכשל בכל הניסיונות")
     return []
 
 # =======================
-# 🔎 PERPLEXITY – משיכת נתונים מהאינטרנט
+# 🌐 PERPLEXITY – השלמת נתוני רכב
 # =======================
-def ask_perplexity_for_specs(car_list, use_dict=True, max_retries=5):
+def ask_perplexity_for_specs(car_list, max_retries=5):
     if not car_list:
         return {}
 
-    prompt_template = """
-    Please find the launch price in Israel (מחיר השקה בישראל) and the average fuel efficiency (צריכת דלק ממוצעת) for the following cars.
-    The output must be a valid JSON object. Do not include any other text, explanations, or code blocks.
-    Return JSON in the format:
-    {{
-      "<model> <year>": {{
-        "base_price_new": <int>,
-        "fuel_efficiency": <int>
-      }}
-    }}
-    For the following cars:
-    {cars}
-    """
-
+    url = "https://api.perplexity.ai/chat/completions"
     headers = {
         "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
         "Content-Type": "application/json"
     }
-    
-    # We will still use the dict for the parameters if available, and only ask Perplexity for base price and fuel efficiency.
-    # The prompt will always be structured to ask for both, to keep the logic simple.
-    for car in car_list:
-        prompt = prompt_template.format(cars=json.dumps([car], ensure_ascii=False))
-        data = {
-            "model": "llama-3-sonar-large-32k-online",
-            "messages": [
-                {"role": "user", "content": prompt}
-            ]
-        }
-        
-        for attempt in range(max_retries):
-            try:
-                response = requests.post(
-                    "[https://api.perplexity.ai/chat/completions](https://api.perplexity.ai/chat/completions)",
-                    headers=headers,
-                    json=data
-                )
-                response.raise_for_status()
-                raw_text = response.json()["choices"][0]["message"]["content"].strip()
-                st.text_area(f"==== RAW PERPLEXITY RESPONSE for {car['model']} {car['year']} (attempt {attempt+1}) ====", raw_text, height=200)
-                
-                if raw_text.startswith("```"):
-                    raw_text = raw_text.strip("```json").strip("```").strip()
-                specs = json.loads(raw_text)
-                st.success(f"✅ Perplexity החזיר JSON תקין עבור {car['model']} {car['year']} בניסיון {attempt+1}")
-                return specs
-            except Exception as e:
-                st.warning(f"⚠️ Perplexity ניסיון {attempt+1} נכשל עבור {car['model']} {car['year']}: {e}")
 
-    st.error("❌ Perplexity נכשל 5 פעמים. משתמש בערכי ברירת מחדל.")
     specs = {}
     for car in car_list:
-        specs[f"{car['model']} {car['year']}"] = {
-            "base_price_new": 100000,
-            "fuel_efficiency": 14,
+        query = f"מה היה מחיר ההשקה בישראל עבור {car['model']} שנת {car['year']}? ומה הייתה צריכת הדלק הממוצעת בליטרים ל-100 ק״מ?"
+        payload = {
+            "model": "sonar-pro",
+            "messages": [{"role": "user", "content": query}]
         }
+
+        for attempt in range(max_retries):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=30)
+                if resp.status_code != 200:
+                    raise Exception(f"HTTP {resp.status_code}: {resp.text}")
+
+                raw = resp.json()
+                st.text_area(f"==== RAW PERPLEXITY RESPONSE ({car['model']} {car['year']}, attempt {attempt+1}) ====",
+                             json.dumps(raw, ensure_ascii=False, indent=2), height=200)
+
+                text = raw["choices"][0]["message"]["content"]
+
+                # ננסה לפענח JSON אם יש
+                try:
+                    parsed = json.loads(text)
+                except:
+                    parsed = {
+                        "base_price_new": 100000,
+                        "fuel_efficiency": 14
+                    }
+
+                specs[f"{car['model']} {car['year']}"] = parsed
+                break
+            except Exception as e:
+                st.warning(f"⚠️ Perplexity ניסיון {attempt+1} נכשל עבור {car['model']} {car['year']}: {e}")
+        else:
+            specs[f"{car['model']} {car['year']}"] = {
+                "base_price_new": 100000,
+                "fuel_efficiency": 14
+            }
+
     return specs
 
-
 # =======================
-# 📉 נוסחת ירידת ערך (עם debug)
+# 📉 נוסחת ירידת ערך
 # =======================
 def calculate_price(base_price_new, year, category, reliability, demand, fuel_efficiency):
     age = datetime.now().year - int(year)
-    st.write(f"📉 חישוב ירידת ערך: base={base_price_new}, year={year}, age={age}, cat={category}, rel={reliability}, demand={demand}, eff={fuel_efficiency}")
     price = base_price_new
     price *= (1 - 0.07) ** age
     if category in ["מנהלים", "יוקרה"]:
@@ -185,19 +164,20 @@ def calculate_price(base_price_new, year, category, reliability, demand, fuel_ef
     return round(price, -2)
 
 # =======================
-# 🔎 סינון (עם debug)
+# 🔎 סינון
 # =======================
 def filter_results(cars, answers):
-    st.write(f"🔎 לפני סינון: {len(cars)} רכבים")
     filtered = []
     for car in cars:
+        model_name = car["model"]
         calc_price = car.get("calculated_price")
         if calc_price is None:
+            continue
+        if not any(model_name in x for x in car_db["model"].values):
             continue
         if not (answers["budget_min"] * 0.87 <= calc_price <= answers["budget_max"] * 1.13):
             continue
         filtered.append(car)
-    st.write(f"🔎 אחרי סינון: {len(filtered)} רכבים")
     return filtered
 
 # =======================
@@ -236,36 +216,47 @@ if submit:
     gpt_models = ask_gpt_for_models(answers)
 
     final_cars = []
-    
-    # The logic is simplified since Perplexity will fetch all data.
-    # No need to split into dict_cars and fallback_cars.
-    specs = ask_perplexity_for_specs(gpt_models)
+    dict_cars, fallback_cars = [], []
 
     for car in gpt_models:
-        full_name = f"{car['model']} {car['year']}"
-        extra = specs.get(full_name, {})
-        
-        # We need to get the brand info from the BRAND_DICT since Perplexity won't return it.
         brand = car["model"].split()[0]
-        params = BRAND_DICT.get(brand, {
-            "category": "משפחתיות",
-            "reliability": "בינונית",
-            "demand": "בינוני",
-            "brand_country": "לא ידוע",
-            "luxury": False,
-            "popular": True
-        })
-        
-        car["calculated_price"] = calculate_price(
-            extra.get("base_price_new", 100000),
+        if brand in BRAND_DICT:
+            dict_cars.append(car)
+        else:
+            fallback_cars.append(car)
+
+    # ✅ מותגים מהמילון (לא נדרשת השלמה)
+    for car in dict_cars:
+        brand = car["model"].split()[0]
+        params = BRAND_DICT[brand]
+        calc_price = calculate_price(
+            100000,  # מחיר השקה דיפולטי
             car["year"],
             params["category"],
             params["reliability"],
             params["demand"],
-            extra.get("fuel_efficiency", 14)
+            14  # צריכת דלק דיפולטית
         )
+        car["calculated_price"] = calc_price
         final_cars.append(car)
 
+    # ✅ מותגים לא במילון – נשלח ל־Perplexity
+    if fallback_cars:
+        specs_fb = ask_perplexity_for_specs(fallback_cars)
+        for car in fallback_cars:
+            extra = specs_fb.get(f"{car['model']} {car['year']}", {})
+            calc_price = calculate_price(
+                extra.get("base_price_new", 100000),
+                car["year"],
+                extra.get("category", "משפחתיות"),
+                extra.get("reliability", "בינונית"),
+                extra.get("demand", "בינוני"),
+                extra.get("fuel_efficiency", 14)
+            )
+            car["calculated_price"] = calc_price
+            final_cars.append(car)
+
+    # סינון
     filtered = filter_results(final_cars, answers)
 
     if filtered:
