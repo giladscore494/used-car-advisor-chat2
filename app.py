@@ -1,4 +1,4 @@
-הנה הקוד המלא והמעודכן, מוכן להעתקה והדבקה. השינוי היחיד שביצעתי הוא החלפת הפרמטר tools={"grounding": {}} ב-grounding=True בקריאה לפונקציית generate_content, בהתאם לתיעוד של ג'מיני.
+הנ
 import os
 import json
 import pandas as pd
