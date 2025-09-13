@@ -1,4 +1,3 @@
-
 import os
 import json
 import pandas as pd
@@ -134,7 +133,7 @@ def ask_gemini_for_specs(car_list, use_dict=True, max_retries=5):
     for attempt in range(max_retries):
         try:
             prompt = prompt_template.format(cars=json.dumps(car_list, ensure_ascii=False))
-            resp = model.generate_content(prompt, grounding=True)
+            resp = model.generate_content(prompt)
             raw = resp.text.strip()
             st.text_area(f"==== RAW GEMINI RESPONSE (attempt {attempt+1}) ====", raw, height=200)
 
@@ -287,4 +286,3 @@ if submit:
         st.dataframe(pd.DataFrame(filtered))
     else:
         st.error("⚠️ לא נמצאו רכבים מתאימים.")
-
