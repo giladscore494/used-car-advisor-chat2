@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import pandas as pd
 import streamlit as st
@@ -25,7 +26,7 @@ def load_car_dataset():
 car_db = load_car_dataset()
 
 # =======================
-# 📖 BRAND DICTIONARY – מותגים
+# 🗂️ BRAND DICTIONARY + TRANSLATION
 # =======================
 BRAND_DICT = {
     "Toyota": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": False, "popular": True, "category": "משפחתי"},
@@ -39,7 +40,20 @@ BRAND_DICT = {
     "BMW": {"brand_country": "גרמניה", "reliability": "בינונית", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
     "Mercedes": {"brand_country": "גרמניה", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
     "Suzuki": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": False, "popular": True, "category": "סופר מיני"},
-    # אפשר להוסיף עוד...
+}
+
+BRAND_TRANSLATION = {
+    "יונדאי": "Hyundai",
+    "מאזדה": "Mazda",
+    "טויוטה": "Toyota",
+    "קיה": "Kia",
+    "הונדה": "Honda",
+    "פורד": "Ford",
+    "פולקסווגן": "Volkswagen",
+    "אודי": "Audi",
+    "ב.מ.וו": "BMW",
+    "מרצדס": "Mercedes",
+    "סוזוקי": "Suzuki",
 }
 
 # =======================
@@ -85,6 +99,17 @@ def ask_gpt_for_models(user_answers, max_retries=5):
 # =======================
 # 🌐 PERPLEXITY – השלמת נתוני רכב
 # =======================
+def parse_price_and_fuel(text):
+    """מחלץ מחיר השקה וצריכת דלק מתוך טקסט"""
+    base_price, fuel_eff = 100000, 14
+    price_match = re.search(r"(\d{2,3}[.,]?\d{0,3}) ?ש״?ח", text)
+    fuel_match = re.search(r"(\d{1,2}[.,]?\d?) ?ליטר ל-?100", text)
+    if price_match:
+        base_price = int(price_match.group(1).replace(",", "").replace(".", ""))
+    if fuel_match:
+        fuel_eff = float(fuel_match.group(1))
+    return base_price, fuel_eff
+
 def ask_perplexity_for_specs(car_list, max_retries=5):
     if not car_list:
         return {}
@@ -97,41 +122,38 @@ def ask_perplexity_for_specs(car_list, max_retries=5):
 
     specs = {}
     for car in car_list:
-        query = f"מה היה מחיר ההשקה בישראל עבור {car['model']} שנת {car['year']}? ומה הייתה צריכת הדלק הממוצעת בליטרים ל-100 ק״מ?"
-        payload = {
-            "model": "sonar-pro",
-            "messages": [{"role": "user", "content": query}]
-        }
+        query = f"מה היה מחיר ההשקה בישראל עבור {car['model']} שנת {car['year']}? ומה הייתה צריכת הדלק הממוצעת בליטרים ל-100 ק״מ? החזר JSON עם מפתחות base_price_new ו-fuel_efficiency."
+        payload = {"model": "sonar-pro", "messages": [{"role": "user", "content": query}]}
 
         for attempt in range(max_retries):
             try:
                 resp = requests.post(url, headers=headers, json=payload, timeout=30)
-                if resp.status_code != 200:
-                    raise Exception(f"HTTP {resp.status_code}: {resp.text}")
-
                 raw = resp.json()
                 st.text_area(f"==== RAW PERPLEXITY RESPONSE ({car['model']} {car['year']}, attempt {attempt+1}) ====",
                              json.dumps(raw, ensure_ascii=False, indent=2), height=200)
 
                 text = raw["choices"][0]["message"]["content"]
 
-                # ננסה לפענח JSON אם יש
                 try:
                     parsed = json.loads(text)
+                    base_price = parsed.get("base_price_new", 100000)
+                    fuel_eff = parsed.get("fuel_efficiency", 14)
                 except:
-                    parsed = {
-                        "base_price_new": 100000,
-                        "fuel_efficiency": 14
-                    }
+                    base_price, fuel_eff = parse_price_and_fuel(text)
 
-                specs[f"{car['model']} {car['year']}"] = parsed
+                specs[f"{car['model']} {car['year']}"] = {
+                    "base_price_new": base_price,
+                    "fuel_efficiency": fuel_eff,
+                    "citations": raw.get("citations", [])
+                }
                 break
             except Exception as e:
                 st.warning(f"⚠️ Perplexity ניסיון {attempt+1} נכשל עבור {car['model']} {car['year']}: {e}")
         else:
             specs[f"{car['model']} {car['year']}"] = {
                 "base_price_new": 100000,
-                "fuel_efficiency": 14
+                "fuel_efficiency": 14,
+                "citations": []
             }
 
     return specs
@@ -172,8 +194,6 @@ def filter_results(cars, answers):
         model_name = car["model"]
         calc_price = car.get("calculated_price")
         if calc_price is None:
-            continue
-        if not any(model_name in x for x in car_db["model"].values):
             continue
         if not (answers["budget_min"] * 0.87 <= calc_price <= answers["budget_max"] * 1.13):
             continue
@@ -219,28 +239,29 @@ if submit:
     dict_cars, fallback_cars = [], []
 
     for car in gpt_models:
-        brand = car["model"].split()[0]
+        brand_raw = car["model"].split()[0]
+        brand = BRAND_TRANSLATION.get(brand_raw, brand_raw)
         if brand in BRAND_DICT:
+            car["brand"] = brand
             dict_cars.append(car)
         else:
             fallback_cars.append(car)
 
-    # ✅ מותגים מהמילון (לא נדרשת השלמה)
+    # ✅ מותגים מהמילון
     for car in dict_cars:
-        brand = car["model"].split()[0]
-        params = BRAND_DICT[brand]
+        params = BRAND_DICT[car["brand"]]
         calc_price = calculate_price(
-            100000,  # מחיר השקה דיפולטי
+            100000,
             car["year"],
             params["category"],
             params["reliability"],
             params["demand"],
-            14  # צריכת דלק דיפולטית
+            14
         )
         car["calculated_price"] = calc_price
         final_cars.append(car)
 
-    # ✅ מותגים לא במילון – נשלח ל־Perplexity
+    # ✅ מותגים לא במילון → Perplexity
     if fallback_cars:
         specs_fb = ask_perplexity_for_specs(fallback_cars)
         for car in fallback_cars:
@@ -254,6 +275,7 @@ if submit:
                 extra.get("fuel_efficiency", 14)
             )
             car["calculated_price"] = calc_price
+            car["citations"] = extra.get("citations", [])
             final_cars.append(car)
 
     # סינון
@@ -261,6 +283,19 @@ if submit:
 
     if filtered:
         st.success("✅ נמצאו רכבים מתאימים:")
-        st.dataframe(pd.DataFrame(filtered))
+        df = pd.DataFrame(filtered)
+        st.dataframe(df)
+
+        # 📥 כפתור להורדה
+        csv = df.to_csv(index=False)
+        st.download_button("⬇️ הורד כ־CSV", data=csv, file_name="car_results.csv", mime="text/csv")
+
+        # 🔗 מקורות אם קיימים
+        for car in filtered:
+            if car.get("citations"):
+                st.markdown(f"**מקורות עבור {car['model']} {car['year']}:**")
+                for url in car["citations"]:
+                    st.markdown(f"- [קישור]({url})")
+
     else:
         st.error("⚠️ לא נמצאו רכבים מתאימים.")
