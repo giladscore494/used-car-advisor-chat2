@@ -2,18 +2,20 @@ import os
 import json
 import pandas as pd
 import streamlit as st
+import requests  # Added
 from datetime import datetime
 from openai import OpenAI
-import google.generativeai as genai
+# Removed: import google.generativeai as genai
 
 # =======================
 # 🔑 API KEYS
 # =======================
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# Removed: GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-genai.configure(api_key=GEMINI_API_KEY)
+# Removed: genai.configure(api_key=GEMINI_API_KEY)
 
 # =======================
 # 📂 LOAD DATA
@@ -89,76 +91,70 @@ def ask_gpt_for_models(user_answers, max_retries=5):
     return []
 
 # =======================
-# 🤖 GEMINI – השלמת נתונים עם grounding
+# 🔎 PERPLEXITY – משיכת נתונים מהאינטרנט
 # =======================
-def ask_gemini_for_specs(car_list, use_dict=True, max_retries=5):
+def ask_perplexity_for_specs(car_list, use_dict=True, max_retries=5):
     if not car_list:
         return {}
 
-    if use_dict:
-        prompt_template = """
-        מצא את *מחיר ההשקה בישראל* לשנתון ואת צריכת הדלק הממוצעת.
-        החזר JSON במבנה:
-        {{
-          "<model> <year>": {{
-            "base_price_new": <int>,
-            "fuel_efficiency": <int>
-          }}
-        }}
-        עבור:
-        {cars}
-        """
-    else:
-        prompt_template = """
-        מצא את *מחיר ההשקה בישראל* לשנתון, ופרטים נוספים.
-        החזר JSON במבנה:
-        {{
-          "<model> <year>": {{
-            "base_price_new": <int>,
-            "category": "<string>",
-            "brand_country": "<string>",
-            "reliability": "<string>",
-            "demand": "<string>",
-            "luxury": <bool>,
-            "popular": <bool>,
-            "fuel_efficiency": <int>
-          }}
-        }}
-        עבור:
-        {cars}
-        """
+    prompt_template = """
+    Please find the launch price in Israel (מחיר השקה בישראל) and the average fuel efficiency (צריכת דלק ממוצעת) for the following cars.
+    The output must be a valid JSON object. Do not include any other text, explanations, or code blocks.
+    Return JSON in the format:
+    {{
+      "<model> <year>": {{
+        "base_price_new": <int>,
+        "fuel_efficiency": <int>
+      }}
+    }}
+    For the following cars:
+    {cars}
+    """
 
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    headers = {
+        "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    # We will still use the dict for the parameters if available, and only ask Perplexity for base price and fuel efficiency.
+    # The prompt will always be structured to ask for both, to keep the logic simple.
+    for car in car_list:
+        prompt = prompt_template.format(cars=json.dumps([car], ensure_ascii=False))
+        data = {
+            "model": "llama-3-sonar-large-32k-online",
+            "messages": [
+                {"role": "user", "content": prompt}
+            ]
+        }
+        
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    "[https://api.perplexity.ai/chat/completions](https://api.perplexity.ai/chat/completions)",
+                    headers=headers,
+                    json=data
+                )
+                response.raise_for_status()
+                raw_text = response.json()["choices"][0]["message"]["content"].strip()
+                st.text_area(f"==== RAW PERPLEXITY RESPONSE for {car['model']} {car['year']} (attempt {attempt+1}) ====", raw_text, height=200)
+                
+                if raw_text.startswith("```"):
+                    raw_text = raw_text.strip("```json").strip("```").strip()
+                specs = json.loads(raw_text)
+                st.success(f"✅ Perplexity החזיר JSON תקין עבור {car['model']} {car['year']} בניסיון {attempt+1}")
+                return specs
+            except Exception as e:
+                st.warning(f"⚠️ Perplexity ניסיון {attempt+1} נכשל עבור {car['model']} {car['year']}: {e}")
 
-    for attempt in range(max_retries):
-        try:
-            prompt = prompt_template.format(cars=json.dumps(car_list, ensure_ascii=False))
-            resp = model.generate_content(prompt)
-            raw = resp.text.strip()
-            st.text_area(f"==== RAW GEMINI RESPONSE (attempt {attempt+1}) ====", raw, height=200)
-
-            if raw.startswith("```"):
-                raw = raw.strip("```json").strip("```").strip()
-            specs = json.loads(raw)
-            st.success(f"✅ Gemini החזיר JSON תקין בניסיון {attempt+1}")
-            return specs
-        except Exception as e:
-            st.warning(f"⚠️ Gemini ניסיון {attempt+1} נכשל: {e}")
-
-    st.error("❌ Gemini נכשל 5 פעמים. משתמש בערכי ברירת מחדל.")
+    st.error("❌ Perplexity נכשל 5 פעמים. משתמש בערכי ברירת מחדל.")
     specs = {}
     for car in car_list:
         specs[f"{car['model']} {car['year']}"] = {
             "base_price_new": 100000,
             "fuel_efficiency": 14,
-            "category": "משפחתיות",
-            "brand_country": "לא ידוע",
-            "reliability": "בינונית",
-            "demand": "בינוני",
-            "luxury": False,
-            "popular": True
         }
     return specs
+
 
 # =======================
 # 📉 נוסחת ירידת ערך (עם debug)
@@ -240,44 +236,35 @@ if submit:
     gpt_models = ask_gpt_for_models(answers)
 
     final_cars = []
-    dict_cars, fallback_cars = [], []
+    
+    # The logic is simplified since Perplexity will fetch all data.
+    # No need to split into dict_cars and fallback_cars.
+    specs = ask_perplexity_for_specs(gpt_models)
 
     for car in gpt_models:
+        full_name = f"{car['model']} {car['year']}"
+        extra = specs.get(full_name, {})
+        
+        # We need to get the brand info from the BRAND_DICT since Perplexity won't return it.
         brand = car["model"].split()[0]
-        if brand in BRAND_DICT:
-            dict_cars.append(car)
-        else:
-            fallback_cars.append(car)
-
-    if dict_cars:
-        specs_dict = ask_gemini_for_specs(dict_cars, use_dict=True)
-        for car in dict_cars:
-            brand = car["model"].split()[0]
-            params = BRAND_DICT[brand]
-            extra = specs_dict.get(f"{car['model']} {car['year']}", {})
-            car["calculated_price"] = calculate_price(
-                extra.get("base_price_new", 100000),
-                car["year"],
-                params["category"],
-                params["reliability"],
-                params["demand"],
-                extra.get("fuel_efficiency", 14)
-            )
-            final_cars.append(car)
-
-    if fallback_cars:
-        specs_fb = ask_gemini_for_specs(fallback_cars, use_dict=False)
-        for car in fallback_cars:
-            extra = specs_fb.get(f"{car['model']} {car['year']}", {})
-            car["calculated_price"] = calculate_price(
-                extra.get("base_price_new", 100000),
-                car["year"],
-                extra.get("category", "משפחתיות"),
-                extra.get("reliability", "בינונית"),
-                extra.get("demand", "בינוני"),
-                extra.get("fuel_efficiency", 14)
-            )
-            final_cars.append(car)
+        params = BRAND_DICT.get(brand, {
+            "category": "משפחתיות",
+            "reliability": "בינונית",
+            "demand": "בינוני",
+            "brand_country": "לא ידוע",
+            "luxury": False,
+            "popular": True
+        })
+        
+        car["calculated_price"] = calculate_price(
+            extra.get("base_price_new", 100000),
+            car["year"],
+            params["category"],
+            params["reliability"],
+            params["demand"],
+            extra.get("fuel_efficiency", 14)
+        )
+        final_cars.append(car)
 
     filtered = filter_results(final_cars, answers)
 
