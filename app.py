@@ -62,7 +62,7 @@ BRAND_TRANSLATION = {
 def ask_gpt_for_models(user_answers, max_retries=5):
     prompt = f"""
     בהתבסס על השאלון הבא, הצע עד 20 דגמים רלוונטיים בישראל.
-    אתה חייב להחזיר JSON בלבד, עם השדות:
+    החזר JSON בלבד, בפורמט:
     [
       {{
         "model": "<string>",
@@ -74,7 +74,6 @@ def ask_gpt_for_models(user_answers, max_retries=5):
       }}
     ]
 
-    חשוב מאוד: החזר אך ורק דגמים שתואמים במדויק את סינון המשתמש (כולל אם דרש טורבו או לא).
     שאלון:
     {json.dumps(user_answers, ensure_ascii=False)}
     """
@@ -99,75 +98,81 @@ def ask_gpt_for_models(user_answers, max_retries=5):
     return []
 
 # =======================
-# 🌐 PERPLEXITY – השלמת נתוני רכב
+# 🌐 PERPLEXITY – השלמת נתוני רכב (בבת אחת)
 # =======================
-def parse_price_and_fuel(text):
-    base_price, fuel_eff = 100000, 14
-    price_match = re.search(r"(\d{2,3}[.,]?\d{0,3}) ?ש״?ח", text)
-    fuel_match = re.search(r"(\d{1,2}[.,]?\d?) ?ליטר ל-?100", text)
-    if price_match:
-        base_price = int(price_match.group(1).replace(",", "").replace(".", ""))
-    if fuel_match:
-        fuel_eff = float(fuel_match.group(1))
-    return base_price, fuel_eff
+def parse_kv_format_block(text):
+    """ממיר בלוק של key=value למילון לפי רכב"""
+    specs = {}
+    current_car = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.endswith(":"):  # שם רכב
+            current_car = line[:-1]
+            specs[current_car] = {"base_price_new": 100000, "fuel_efficiency": 14, "turbo": False}
+        elif "=" in line and current_car:
+            k, v = line.split("=", 1)
+            k, v = k.strip(), v.strip()
+            if k == "base_price_new":
+                try:
+                    specs[current_car][k] = int(v.replace(",", "").replace("₪", ""))
+                except:
+                    pass
+            elif k == "fuel_efficiency":
+                try:
+                    specs[current_car][k] = float(v)
+                except:
+                    pass
+            elif k == "turbo":
+                specs[current_car][k] = v.lower() in ["true", "yes", "1"]
+    return specs
 
-def ask_perplexity_for_specs(car_list, max_retries=5):
+def ask_perplexity_for_specs(car_list, max_retries=3):
     if not car_list:
         return {}
 
     url = "https://api.perplexity.ai/chat/completions"
-    headers = {"Authorization": f"Bearer {PERPLEXITY_API_KEY}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+        "Content-Type": "application/json"
+    }
 
-    specs = {}
-    for car in car_list:
-        query = f"""
-        מה היה מחיר ההשקה בישראל עבור {car['model']} שנת {car['year']}?
-        מה הייתה צריכת הדלק הממוצעת בליטרים ל-100 ק״מ?
-        האם לדגם זה יש מנוע טורבו? החזר JSON עם:
-        {{
-          "base_price_new": <int>,
-          "fuel_efficiency": <float>,
-          "turbo": <true/false>
-        }}
-        """
-        payload = {"model": "sonar-pro", "messages": [{"role": "user", "content": query}]}
+    car_queries = "\n".join([f"- {car['model']} {car['year']}" for car in car_list])
+    query = f"""
+עבור כל אחד מהרכבים הבאים, החזר נתונים בפורמט key=value בלבד:
 
-        for attempt in range(max_retries):
-            try:
-                resp = requests.post(url, headers=headers, json=payload, timeout=30)
-                raw = resp.json()
-                st.text_area(f"==== RAW PERPLEXITY RESPONSE ({car['model']} {car['year']}, attempt {attempt+1}) ====",
-                             json.dumps(raw, ensure_ascii=False, indent=2), height=200)
+{car_queries}
 
-                text = raw["choices"][0]["message"]["content"]
+פורמט חובה:
+<Model Year>:
+base_price_new=<int>
+fuel_efficiency=<float>
+turbo=<true/false>
 
-                try:
-                    parsed = json.loads(text)
-                    base_price = parsed.get("base_price_new", 100000)
-                    fuel_eff = parsed.get("fuel_efficiency", 14)
-                    turbo = parsed.get("turbo", False)
-                except:
-                    base_price, fuel_eff = parse_price_and_fuel(text)
-                    turbo = False
+אם אין נתונים – השתמש בברירת מחדל:
+base_price_new=100000
+fuel_efficiency=14
+turbo=false
 
-                specs[f"{car['model']} {car['year']}"] = {
-                    "base_price_new": base_price,
-                    "fuel_efficiency": fuel_eff,
-                    "turbo": turbo,
-                    "citations": raw.get("citations", [])
-                }
-                break
-            except Exception as e:
-                st.warning(f"⚠️ Perplexity ניסיון {attempt+1} נכשל עבור {car['model']} {car['year']}: {e}")
-        else:
-            specs[f"{car['model']} {car['year']}"] = {
-                "base_price_new": 100000,
-                "fuel_efficiency": 14,
-                "turbo": False,
-                "citations": []
-            }
+אסור להחזיר טקסט חופשי, רק את הפורמט.
+"""
 
-    return specs
+    payload = {"model": "sonar-pro", "messages": [{"role": "user", "content": query}]}
+
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            raw = resp.json()
+            st.text_area(f"==== RAW PERPLEXITY RESPONSE (attempt {attempt+1}) ====",
+                         json.dumps(raw, ensure_ascii=False, indent=2), height=200)
+
+            text = raw["choices"][0]["message"]["content"]
+            specs = parse_kv_format_block(text)
+            return specs
+        except Exception as e:
+            st.warning(f"⚠️ Perplexity ניסיון {attempt+1} נכשל: {e}")
+    return {}
 
 # =======================
 # 📉 נוסחת ירידת ערך
@@ -202,27 +207,18 @@ def calculate_price(base_price_new, year, category, reliability, demand, fuel_ef
 def filter_results(cars, answers):
     filtered = []
     for car in cars:
-        reasons = []
         model_name = car["model"]
         calc_price = car.get("calculated_price")
-
-        # מחיר
         if calc_price is None:
-            reasons.append("אין מחיר מחושב")
-        elif not (answers["budget_min"] * 0.87 <= calc_price <= answers["budget_max"] * 1.13):
-            reasons.append(f"מחיר {calc_price} לא בטווח")
-
-        # טורבו
-        if "turbo" in car and answers["turbo"] != "לא משנה":
-            required = (answers["turbo"] == "כן")
-            if car.get("turbo", False) != required:
-                reasons.append(f"טורבו לא תואם (נדרש {required}, בפועל {car.get('turbo')})")
-
-        if not reasons:
-            filtered.append(car)
-        else:
-            st.text(f"❌ {model_name} {car['year']} נפסל: {', '.join(reasons)}")
-
+            continue
+        if not (answers["budget_min"] * 0.87 <= calc_price <= answers["budget_max"] * 1.13):
+            continue
+        if "turbo" in answers and car.get("turbo") is not None:
+            if answers["turbo_pref"] == "כן" and not car.get("turbo"):
+                continue
+            if answers["turbo_pref"] == "לא" and car.get("turbo"):
+                continue
+        filtered.append(car)
     return filtered
 
 # =======================
@@ -240,7 +236,7 @@ with st.form("car_form"):
     fuel = st.selectbox("מנוע מועדף", ["בנזין", "דיזל", "היברידי", "חשמלי"])
     gearbox = st.selectbox("גיר", ["לא משנה", "אוטומט", "ידני"])
     body_type = st.text_input("סוג רכב (למשל: סדאן, SUV, האצ׳בק)")
-    turbo = st.selectbox("מנוע טורבו", ["לא משנה", "כן", "לא"])
+    turbo_pref = st.selectbox("מנוע טורבו?", ["לא משנה", "כן", "לא"])
     reliability_pref = st.selectbox("מה חשוב יותר?", ["אמינות מעל הכול", "חיסכון בדלק", "שמירת ערך"])
     submit = st.form_submit_button("מצא רכבים")
 
@@ -255,7 +251,7 @@ if submit:
         "fuel": fuel,
         "gearbox": gearbox,
         "body_type": body_type,
-        "turbo": turbo,
+        "turbo_pref": turbo_pref,
         "reliability_pref": reliability_pref,
     }
 
@@ -286,10 +282,9 @@ if submit:
             14
         )
         car["calculated_price"] = calc_price
-        car["turbo"] = False  # ברירת מחדל – מותגים במילון בלי מידע טורבו
         final_cars.append(car)
 
-    # ✅ מותגים לא במילון → Perplexity
+    # ✅ מותגים לא במילון → Perplexity (בבת אחת)
     if fallback_cars:
         specs_fb = ask_perplexity_for_specs(fallback_cars)
         for car in fallback_cars:
@@ -315,11 +310,9 @@ if submit:
         df = pd.DataFrame(filtered)
         st.dataframe(df)
 
-        # 📥 כפתור להורדה
         csv = df.to_csv(index=False)
         st.download_button("⬇️ הורד כ־CSV", data=csv, file_name="car_results.csv", mime="text/csv")
 
-        # 🔗 מקורות אם קיימים
         for car in filtered:
             if car.get("citations"):
                 st.markdown(f"**מקורות עבור {car['model']} {car['year']}:**")
