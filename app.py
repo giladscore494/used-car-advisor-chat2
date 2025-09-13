@@ -26,14 +26,44 @@ def load_car_dataset():
 car_db = load_car_dataset()
 
 # =======================
-# 🧮 נוסחת ירידת ערך חדשה
+# 🗂️ BRAND DICTIONARY + TRANSLATION
+# =======================
+BRAND_DICT = {
+    "Toyota": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": False, "popular": True, "category": "משפחתי"},
+    "Hyundai": {"brand_country": "קוריאה", "reliability": "בינונית", "demand": "גבוה", "luxury": False, "popular": True, "category": "משפחתי"},
+    "Mazda": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": False, "popular": True, "category": "משפחתי"},
+    "Kia": {"brand_country": "קוריאה", "reliability": "בינונית", "demand": "גבוה", "luxury": False, "popular": True, "category": "משפחתי"},
+    "Honda": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "בינוני", "luxury": False, "popular": False, "category": "משפחתי"},
+    "Ford": {"brand_country": "ארה״ב", "reliability": "נמוכה", "demand": "נמוך", "luxury": False, "popular": False, "category": "משפחתי"},
+    "Volkswagen": {"brand_country": "גרמניה", "reliability": "בינונית", "demand": "גבוה", "luxury": True, "popular": True, "category": "משפחתי"},
+    "Audi": {"brand_country": "גרמניה", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
+    "BMW": {"brand_country": "גרמניה", "reliability": "בינונית", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
+    "Mercedes": {"brand_country": "גרמניה", "reliability": "גבוהה", "demand": "גבוה", "luxury": True, "popular": True, "category": "יוקרה"},
+    "Suzuki": {"brand_country": "יפן", "reliability": "גבוהה", "demand": "גבוה", "luxury": False, "popular": True, "category": "סופר מיני"},
+}
+
+BRAND_TRANSLATION = {
+    "יונדאי": "Hyundai",
+    "מאזדה": "Mazda",
+    "טויוטה": "Toyota",
+    "קיה": "Kia",
+    "הונדה": "Honda",
+    "פורד": "Ford",
+    "פולקסווגן": "Volkswagen",
+    "אודי": "Audi",
+    "ב.מ.וו": "BMW",
+    "מרצדס": "Mercedes",
+    "סוזוקי": "Suzuki",
+}
+
+# =======================
+# 🧮 נוסחת ירידת ערך
 # =======================
 def calculate_price(base_price_new, year, category, brand_country,
                     reliability, demand, popular, fuel_efficiency):
     current_year = datetime.now().year
     age = current_year - year
 
-    # ירידת ערך בסיסית לפי גיל
     if age <= 5:
         depreciation_rate = 0.10
     elif age <= 10:
@@ -41,107 +71,67 @@ def calculate_price(base_price_new, year, category, brand_country,
     else:
         depreciation_rate = 0.22
 
-    # התאמות לפי קטגוריה/מותג
     if category in ["יוקרה", "מנהלים"] or brand_country in ["גרמניה", "ארה״ב"]:
         depreciation_rate += 0.03
     elif brand_country in ["יפן", "קוריאה"]:
         depreciation_rate -= 0.02
 
-    # ביקוש
     if demand == "גבוה":
         depreciation_rate -= 0.02
     elif demand == "נמוך":
         depreciation_rate += 0.02
 
-    # אמינות
     if reliability == "גבוהה":
         depreciation_rate -= 0.02
     elif reliability == "נמוכה":
         depreciation_rate += 0.03
 
-    # חישוב מחיר משוער
     price_est = base_price_new * ((1 - depreciation_rate) ** age)
-
-    # מינימום מחיר רצפה
     price_est = max(price_est, 5000)
 
-    # טווח מחיר
     price_low = int(price_est * 0.9)
     price_high = int(price_est * 1.1)
 
-    return price_low, price_est, price_high
+    return price_low, int(price_est), price_high
 
 # =======================
-# 📋 פונקציית שליפה קשיחה (GPT/Perplexity)
+# 🔎 סינון
 # =======================
-def fetch_with_retries(query_func, user_answers, max_retries=5):
-    prompt = f"""
-    על סמך הקריטריונים:
-    {json.dumps(user_answers, ensure_ascii=False)}
+def filter_results(cars, answers):
+    filtered = []
+    dropped_price, dropped_turbo = [], []
 
-    החזר אך ורק טבלה בפורמט Markdown (לא JSON, לא טקסט חופשי) עם העמודות:
-    | Model | Year | Base Price New | Fuel Efficiency | Turbo |
+    for car in cars:
+        calc_low = car.get("price_low")
+        calc_est = car.get("price_est")
+        calc_high = car.get("price_high")
 
-    דרישות:
-    - התחל את הפלט ישר מהטבלה (הסימן הראשון חייב להיות '|').
-    - כל שורה מייצגת רכב.
-    - בעמודת Turbo יש רק true או false.
-    - בעמודת Year רק מספר ארבע ספרות.
-    - אם אין מידע → החזר טבלה ריקה עם הכותרות בלבד.
-    """
+        if calc_est is None:
+            continue
 
-    for attempt in range(max_retries):
-        raw = query_func(prompt)
-        raw = raw.strip()
-        if raw.startswith("|") and "Model" in raw and "Year" in raw:
-            return raw
-    return "| Model | Year | Base Price New | Fuel Efficiency | Turbo |\n|-------|------|----------------|-----------------|-------|\n"
+        # 🔎 סינון תקציב
+        if not (answers["budget_min"] <= calc_high and answers["budget_max"] >= calc_low):
+            dropped_price.append(car)
+            continue
 
-# =======================
-# 🌐 GPT API
-# =======================
-def gpt_api_call(prompt):
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        return f"| Model | Year | Base Price New | Fuel Efficiency | Turbo |\n|-------|------|----------------|-----------------|-------|\n"
+        # 🔎 סינון טורבו
+        if answers["turbo"] != "לא משנה":
+            turbo_required = True if answers["turbo"] == "כן" else False
+            if car.get("turbo") != turbo_required:
+                dropped_turbo.append(car)
+                continue
 
-# =======================
-# 🌐 PERPLEXITY API
-# =======================
-def perplexity_api_call(prompt):
-    try:
-        url = "https://api.perplexity.ai/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {"model": "sonar-pro", "messages": [{"role": "user", "content": prompt}]}
-        resp = requests.post(url, headers=headers, json=payload, timeout=40)
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"| Model | Year | Base Price New | Fuel Efficiency | Turbo |\n|-------|------|----------------|-----------------|-------|\n"
+        filtered.append(car)
 
-# =======================
-# 🛠️ Parse Table
-# =======================
-def parse_table(markdown_text):
-    try:
-        lines = [l for l in markdown_text.splitlines() if l.strip().startswith("|")]
-        headers = [h.strip() for h in lines[0].split("|")[1:-1]]
-        rows = []
-        for line in lines[2:]:
-            cells = [c.strip() for c in line.split("|")[1:-1]]
-            rows.append(cells)
-        return pd.DataFrame(rows, columns=headers)
-    except Exception:
-        return pd.DataFrame(columns=["Model", "Year", "Base Price New", "Fuel Efficiency", "Turbo"])
+    # 📋 Debug
+    if dropped_price:
+        st.warning("❌ רכבים שנפלו בגלל תקציב:")
+        st.dataframe(pd.DataFrame(dropped_price))
+    if dropped_turbo:
+        st.warning("❌ רכבים שנפלו בגלל טורבו:")
+        st.dataframe(pd.DataFrame(dropped_turbo))
+
+    return filtered
 
 # =======================
 # 🎛️ STREAMLIT APP
@@ -176,25 +166,10 @@ if submit:
         "body_type": body_type,
         "turbo": turbo,
         "reliability_pref": reliability_pref,
-        "extra_notes": extra_notes
+        "extra_notes": extra_notes,
     }
 
-    st.info("📤 שולח בקשה ל־GPT...")
-    raw_gpt = fetch_with_retries(gpt_api_call, answers)
-    df_gpt = parse_table(raw_gpt)
-    st.text_area("==== RAW GPT RESPONSE ====", raw_gpt, height=200)
+    st.info("⚙️ Debug: תשובות משתמש")
+    st.json(answers)
 
-    st.info("📤 שולח בקשה ל־Perplexity...")
-    raw_px = fetch_with_retries(perplexity_api_call, answers)
-    df_px = parse_table(raw_px)
-    st.text_area("==== RAW PERPLEXITY RESPONSE ====", raw_px, height=200)
-
-    final_df = pd.concat([df_gpt, df_px], ignore_index=True).drop_duplicates()
-
-    if not final_df.empty:
-        st.success("✅ נמצאו רכבים מתאימים:")
-        st.dataframe(final_df)
-        csv = final_df.to_csv(index=False)
-        st.download_button("⬇️ הורד כ־CSV", data=csv, file_name="car_results.csv", mime="text/csv")
-    else:
-        st.error("⚠️ לא נמצאו רכבים מתאימים.")
+    # כאן ממשיך החיבור ל-GPT ול-Perplexity + חישוב מחירים
