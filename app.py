@@ -62,17 +62,19 @@ BRAND_TRANSLATION = {
 def ask_gpt_for_models(user_answers, max_retries=5):
     prompt = f"""
     בהתבסס על השאלון הבא, הצע עד 20 דגמים רלוונטיים בישראל.
-    החזר JSON בלבד, בפורמט:
+    אתה חייב להחזיר JSON בלבד, עם השדות:
     [
       {{
         "model": "<string>",
         "year": <int>,
         "engine_cc": <int>,
         "fuel": "<string>",
-        "gearbox": "<string>"
+        "gearbox": "<string>",
+        "turbo": <true/false>
       }}
     ]
 
+    חשוב מאוד: החזר אך ורק דגמים שתואמים במדויק את סינון המשתמש (כולל אם דרש טורבו או לא).
     שאלון:
     {json.dumps(user_answers, ensure_ascii=False)}
     """
@@ -100,7 +102,6 @@ def ask_gpt_for_models(user_answers, max_retries=5):
 # 🌐 PERPLEXITY – השלמת נתוני רכב
 # =======================
 def parse_price_and_fuel(text):
-    """מחלץ מחיר השקה וצריכת דלק מתוך טקסט"""
     base_price, fuel_eff = 100000, 14
     price_match = re.search(r"(\d{2,3}[.,]?\d{0,3}) ?ש״?ח", text)
     fuel_match = re.search(r"(\d{1,2}[.,]?\d?) ?ליטר ל-?100", text)
@@ -115,14 +116,20 @@ def ask_perplexity_for_specs(car_list, max_retries=5):
         return {}
 
     url = "https://api.perplexity.ai/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {PERPLEXITY_API_KEY}", "Content-Type": "application/json"}
 
     specs = {}
     for car in car_list:
-        query = f"מה היה מחיר ההשקה בישראל עבור {car['model']} שנת {car['year']}? ומה הייתה צריכת הדלק הממוצעת בליטרים ל-100 ק״מ? החזר JSON עם מפתחות base_price_new ו-fuel_efficiency."
+        query = f"""
+        מה היה מחיר ההשקה בישראל עבור {car['model']} שנת {car['year']}?
+        מה הייתה צריכת הדלק הממוצעת בליטרים ל-100 ק״מ?
+        האם לדגם זה יש מנוע טורבו? החזר JSON עם:
+        {{
+          "base_price_new": <int>,
+          "fuel_efficiency": <float>,
+          "turbo": <true/false>
+        }}
+        """
         payload = {"model": "sonar-pro", "messages": [{"role": "user", "content": query}]}
 
         for attempt in range(max_retries):
@@ -138,12 +145,15 @@ def ask_perplexity_for_specs(car_list, max_retries=5):
                     parsed = json.loads(text)
                     base_price = parsed.get("base_price_new", 100000)
                     fuel_eff = parsed.get("fuel_efficiency", 14)
+                    turbo = parsed.get("turbo", False)
                 except:
                     base_price, fuel_eff = parse_price_and_fuel(text)
+                    turbo = False
 
                 specs[f"{car['model']} {car['year']}"] = {
                     "base_price_new": base_price,
                     "fuel_efficiency": fuel_eff,
+                    "turbo": turbo,
                     "citations": raw.get("citations", [])
                 }
                 break
@@ -153,6 +163,7 @@ def ask_perplexity_for_specs(car_list, max_retries=5):
             specs[f"{car['model']} {car['year']}"] = {
                 "base_price_new": 100000,
                 "fuel_efficiency": 14,
+                "turbo": False,
                 "citations": []
             }
 
@@ -191,13 +202,27 @@ def calculate_price(base_price_new, year, category, reliability, demand, fuel_ef
 def filter_results(cars, answers):
     filtered = []
     for car in cars:
+        reasons = []
         model_name = car["model"]
         calc_price = car.get("calculated_price")
+
+        # מחיר
         if calc_price is None:
-            continue
-        if not (answers["budget_min"] * 0.87 <= calc_price <= answers["budget_max"] * 1.13):
-            continue
-        filtered.append(car)
+            reasons.append("אין מחיר מחושב")
+        elif not (answers["budget_min"] * 0.87 <= calc_price <= answers["budget_max"] * 1.13):
+            reasons.append(f"מחיר {calc_price} לא בטווח")
+
+        # טורבו
+        if "turbo" in car and answers["turbo"] != "לא משנה":
+            required = (answers["turbo"] == "כן")
+            if car.get("turbo", False) != required:
+                reasons.append(f"טורבו לא תואם (נדרש {required}, בפועל {car.get('turbo')})")
+
+        if not reasons:
+            filtered.append(car)
+        else:
+            st.text(f"❌ {model_name} {car['year']} נפסל: {', '.join(reasons)}")
+
     return filtered
 
 # =======================
@@ -215,6 +240,7 @@ with st.form("car_form"):
     fuel = st.selectbox("מנוע מועדף", ["בנזין", "דיזל", "היברידי", "חשמלי"])
     gearbox = st.selectbox("גיר", ["לא משנה", "אוטומט", "ידני"])
     body_type = st.text_input("סוג רכב (למשל: סדאן, SUV, האצ׳בק)")
+    turbo = st.selectbox("מנוע טורבו", ["לא משנה", "כן", "לא"])
     reliability_pref = st.selectbox("מה חשוב יותר?", ["אמינות מעל הכול", "חיסכון בדלק", "שמירת ערך"])
     submit = st.form_submit_button("מצא רכבים")
 
@@ -229,6 +255,7 @@ if submit:
         "fuel": fuel,
         "gearbox": gearbox,
         "body_type": body_type,
+        "turbo": turbo,
         "reliability_pref": reliability_pref,
     }
 
@@ -259,6 +286,7 @@ if submit:
             14
         )
         car["calculated_price"] = calc_price
+        car["turbo"] = False  # ברירת מחדל – מותגים במילון בלי מידע טורבו
         final_cars.append(car)
 
     # ✅ מותגים לא במילון → Perplexity
@@ -275,6 +303,7 @@ if submit:
                 extra.get("fuel_efficiency", 14)
             )
             car["calculated_price"] = calc_price
+            car["turbo"] = extra.get("turbo", False)
             car["citations"] = extra.get("citations", [])
             final_cars.append(car)
 
