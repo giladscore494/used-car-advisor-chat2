@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה עם טעינה אוטומטית + Fuzzy Matching מותאם למבנה הקובץ שלך
+# Car Advisor – גרסה עם בדיקת תקציב מול Gemini בלבד
 # =========================================
 
 import streamlit as st
@@ -22,7 +22,7 @@ def init_state():
 def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
                       turbo_required, main_use, annual_km, driver_age):
     return {
-        "budget_nis": [float(budget_min), float(budget_max)],   # נשמר, אבל לא מסונן בפועל (אין מחירים בקובץ)
+        "budget_nis": [float(budget_min), float(budget_max)],
         "years": [int(years_range[0]), int(years_range[1])],
         "fuel": [f.lower() for f in fuels],
         "gear": [g.lower() for g in gears],
@@ -31,6 +31,16 @@ def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
         "annual_km": int(annual_km),
         "driver_age": int(driver_age),
     }
+
+# פונקציית השוואה גמישה – מותג/דגם
+def flexible_match(a, b):
+    if not a or not b:
+        return 0
+    return max(
+        fuzz.ratio(str(a).lower(), str(b).lower()),
+        fuzz.partial_ratio(str(a).lower(), str(b).lower()),
+        fuzz.token_sort_ratio(str(a).lower(), str(b).lower())
+    )
 
 # -------- שלב 1: שאלון + מאגר --------
 init_state()
@@ -127,18 +137,28 @@ else:
         valid_cars = []
         if st.session_state.inventory_df is not None and cars_from_gemini:
             df_inv = st.session_state.inventory_df
+            min_budget, max_budget = profile["budget_nis"]
 
             for car in cars_from_gemini:
                 found_match = False
                 for _, row in df_inv.iterrows():
-                    brand_sim = fuzz.ratio(str(car.get("brand","")).lower(), str(row["brand"]).lower())
-                    model_sim = fuzz.partial_ratio(str(car.get("model","")).lower(), str(row["model"]).lower())
+                    brand_sim = flexible_match(car.get("brand",""), row["brand"])
+                    model_sim = flexible_match(car.get("model",""), row["model"])
                     year_match = ("year" in car and row["year"] == car["year"])
-                    if brand_sim >= 85 and model_sim >= 80 and year_match:
+                    if brand_sim >= 70 and model_sim >= 65 and year_match:
                         found_match = True
                         break
 
-                if found_match:
+                # ✅ סינון לפי תקציב מהשאלון מול המחירים שגימניי החזיר
+                price_ok = True
+                if "price_range_nis" in car:
+                    try:
+                        pmin, pmax = car["price_range_nis"]
+                        price_ok = (pmin >= min_budget and pmax <= max_budget)
+                    except Exception:
+                        price_ok = True  # אם הפורמט לא נכון, לא נכשיל
+
+                if found_match and price_ok:
                     valid_cars.append(car)
 
             st.session_state.validated_cars = pd.DataFrame(valid_cars)
@@ -146,4 +166,4 @@ else:
                 st.success(f"✅ נמצאו {len(st.session_state.validated_cars)} רכבים אחרי סינון.")
                 st.dataframe(st.session_state.validated_cars)
             else:
-                st.warning("⚠️ לא נמצאו רכבים שעוברים את הסינון מול המאגר.")
+                st.warning("⚠️ לא נמצאו רכבים שעוברים את הסינון מול המאגר והתקציב.")
