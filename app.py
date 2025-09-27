@@ -80,7 +80,7 @@ if not api_key:
     st.warning("לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה.")
 else:
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
 
     if st.button("🚀 בקש המלצות מגימניי"):
         prompt = f"""
@@ -145,13 +145,11 @@ def calculate_fit_score(row, profile):
     if profile["turbo_required"] is not None:
         if profile["turbo_required"] == row.get("turbo"): score += 5
 
-    # שימוש אמיתי ב-annual_km
     if profile["annual_km"] > 20000 and str(row["fuel"]).lower()=="diesel":
         score += 5
     if profile["annual_km"] < 10000 and str(row["fuel"]).lower()=="electric":
         score += 5
 
-    # ניתוח notes לאמינות
     notes = str(row.get("notes","")).lower()
     if "אמינה" in notes or "reliable" in notes: score += 10
     if "תחזוקה" in notes and ("גבוה" in notes or "יקר" in notes or "high" in notes): score -= 5
@@ -175,22 +173,18 @@ if st.session_state.df_ranked is not None and not st.session_state.df_ranked.emp
     df = st.session_state.df_ranked
     st.markdown("### שלב 4: גרפים")
 
-    # התפלגות FitScore
     fig, ax = plt.subplots(); df["FitScore"].plot(kind="hist", bins=10, edgecolor="black", ax=ax)
     ax.set_title("התפלגות FitScore"); st.pyplot(fig)
 
-    # ממוצע לפי מותג
     fig, ax = plt.subplots()
     df.groupby("brand")["FitScore"].mean().sort_values(ascending=False).head(10).plot(kind="bar", ax=ax)
     ax.set_title("Top 10 מותגים"); st.pyplot(fig)
 
-    # מחיר מול שנה
     df["avg_price"] = df["price_range_nis"].apply(lambda x: (x[0]+x[1])/2)
     fig, ax = plt.subplots()
     df.plot(kind="scatter", x="year", y="avg_price", c="FitScore", cmap="viridis", ax=ax, s=80)
     ax.set_title("מחיר מול שנתון"); st.pyplot(fig)
 
-    # מחיר מול FitScore (חדש)
     fig, ax = plt.subplots()
     ax.scatter(df["avg_price"], df["FitScore"], c=df["FitScore"], cmap="plasma", s=80)
     ax.set_xlabel("מחיר ממוצע"); ax.set_ylabel("FitScore")
@@ -201,12 +195,10 @@ if st.session_state.df_ranked is not None and not st.session_state.df_ranked.emp
     st.markdown("### שלב 5: ייצוא ושמירה")
     df = st.session_state.df_ranked
 
-    # JSON
     json_data = df.to_json(orient="records", force_ascii=False, indent=2)
     st.download_button("📥 הורד JSON", json_data,
         f"cars_{datetime.now().strftime('%Y%m%d_%H%M')}.json", "application/json")
 
-    # Excel
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
         df.to_excel(writer, sheet_name="Cars", index=False)
