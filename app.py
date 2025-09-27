@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה סופית עם עלות כוללת שנתית
+# Car Advisor – גרסה סופית עם חיפוש אינטרנטי חובה
 # =========================================
 
 import streamlit as st
@@ -55,6 +55,34 @@ def clean_gemini_output(cars_raw):
         records.append(record)
         methods.append(method)
     return pd.DataFrame(records), methods
+
+# -------- Normalize values from Gemini --------
+def normalize_car_values(df):
+    if "fuel" in df.columns:
+        df["fuel"] = df["fuel"].replace({
+            "בנזין": "gasoline",
+            "דיזל": "diesel",
+            "היברידי": "hybrid",
+            "דיזל היברידי": "hybrid-diesel",
+            "חשמלי": "electric"
+        })
+    if "gear" in df.columns:
+        df["gear"] = df["gear"].replace({
+            "אוטומטי": "automatic",
+            "אוטומטי (DSG7)": "automatic",
+            "אוטומטי (TCT)": "automatic",
+            "אוטומטי (רובוטי)": "automatic",
+            "ידני": "manual",
+            "ידנית": "manual"
+        })
+    if "turbo" in df.columns:
+        df["turbo"] = df["turbo"].replace({
+            "כן": True,
+            "לא": False,
+            True: True,
+            False: False
+        })
+    return df
 
 # -------- מיפויים --------
 fuel_map = {
@@ -175,7 +203,6 @@ profile["driver_gender"] = driver_gender
 profile["insurance_history"] = insurance_history
 profile["violations"] = violations
 
-# שדה לקביעת מחיר ליטר דלק
 fuel_price = st.number_input("מחיר ליטר דלק (₪)", min_value=1.0, max_value=20.0, value=7.0, step=0.1)
 st.session_state.fuel_price = fuel_price
 profile["fuel_price"] = fuel_price
@@ -199,8 +226,8 @@ else:
 
         דרישות לפלט:
         1. החזר JSON יחיד עם שלושה שדות: "search_performed", "search_queries", "recommended_cars".
-        2. search_performed: True אם בוצע חיפוש אינטרנטי, אחרת False.
-        3. search_queries: מערך עם מחרוזות החיפוש שבוצעו בפועל.
+        2. search_performed: תמיד החזר True. עליך תמיד לבצע חיפוש אינטרנטי ולא להחזיר False.
+        3. search_queries: החזר תמיד את מחרוזות החיפוש שבוצעו בפועל.
         4. recommended_cars: מערך של 5–10 רכבים. כל רכב חייב לכלול:
            - brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
            - avg_fuel_consumption (ק\"מ/ל', מספר בלבד) + fuel_method
@@ -213,6 +240,8 @@ else:
            - performance_score (מספר 1–10 בלבד) + performance_method
            - comfort_features (מספר 1–10 בלבד) + comfort_method
            - suitability (מספר 1–10 בלבד) + suitability_method
+        5. חובה להחזיר אך ורק מספרים עבור כל פרמטר ציון.
+        6. חובה להחזיר רכבים שנמכרים בפועל בישראל בלבד.
         """
 
         with st.spinner("פונה לגימניי..."):
@@ -244,6 +273,9 @@ else:
             results_df, methods_info = clean_gemini_output(cars_to_process)
 
             if not results_df.empty:
+                # --- Normalize Gemini values ---
+                results_df = normalize_car_values(results_df)
+
                 # --- חישוב עלויות ---
                 results_df["annual_fuel_cost"] = (
                     profile["annual_km"] / results_df["avg_fuel_consumption"].replace(0, 1)
