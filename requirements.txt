@@ -1,7 +1,5 @@
-streamlit==1.36.0
-pandas==2.2.2
-numpy==1.26.4
-openai==1.40.2
-requests==2.32.3
-python-dotenv==1.0.1
-rapidfuzz==3.9.6
+streamlit
+pandas
+matplotlib
+google-generativeai
+xlsxwriter
