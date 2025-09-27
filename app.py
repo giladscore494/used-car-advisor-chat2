@@ -236,10 +236,10 @@ else:
             try:
                 resp = model.generate_content(
                     prompt,
-                    config=genai.types.GenerateContentConfig(
-                        tools=[{"google_search": {}}],
-                        response_mime_type="application/json",
-                    ),
+                    generation_config={
+                        "response_mime_type": "application/json"
+                    },
+                    tools=[{"google_search": {}}]
                 )
                 text = resp.candidates[0].content.parts[0].text.strip()
 
