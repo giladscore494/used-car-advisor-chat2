@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה מאוחדת עם Gemini 2.5 Pro
+# Car Advisor – גרסה מאוחדת עם Gemini 2.5 Pro (מתוקן)
 # =========================================
 
 import streamlit as st
@@ -31,8 +31,6 @@ def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
         "annual_km": int(annual_km),
         "driver_age": int(driver_age),
     }
-
-def human_int(n): return f"{n:,}".replace(",", ",")
 
 # -------- שלב 1: שאלון + מאגר --------
 init_state()
@@ -80,7 +78,7 @@ if not api_key:
     st.warning("לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה.")
 else:
     genai.configure(api_key=api_key)
-    model_name = "models/gemini-2.5-pro"  # ← כאן המודל המעודכן
+    model_name = "models/gemini-2.5-pro"
     model = genai.GenerativeModel(model_name)
 
     if st.button("🚀 בקש המלצות מגימניי"):
@@ -90,15 +88,15 @@ else:
 
         שלבים:
         1. חשוב לפי הנתונים בשאלון.
-        2. בצע חיפוש פנימי/ברשת למחירים עדכניים.
+        2. בצע חיפוש ברשת למחירים עדכניים ולזמינות הדגמים בישראל.
         3. סנן רק רכבים בתקציב.
         4. דרג לפי חיסכון, אמינות, עלויות תחזוקה.
         5. החזר 5–10 רכבים בלבד.
         6. החזר בפורמט JSON בלבד עם:
-        brand, model, year, fuel, gear, turbo, price_range_nis, notes
+           brand, model, year, fuel, gear, turbo, price_range_nis, notes
         """
         try:
-            resp = model.generate_content(prompt, tools=["google_search_retrieval"])
+            resp = model.generate_content(prompt)
             text = resp.candidates[0].content.parts[0].text
             cars_from_gemini = json.loads(text)
         except Exception as e:
