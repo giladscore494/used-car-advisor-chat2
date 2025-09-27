@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה מלאה עם צריכת דלק (ק"מ/ל'), אגרה שנתית, ועלות דלק שנתית
+# Car Advisor – גרסה סופית עם עלות כוללת שנתית
 # =========================================
 
 import streamlit as st
@@ -12,12 +12,9 @@ import google.generativeai as genai
 
 st.set_page_config(page_title="Car Advisor", page_icon="🚗", layout="wide")
 
-# -------- קבועים --------
-FUEL_PRICE_NIS = 7.0  # מחיר ליטר דלק ממוצע (₪)
-
 # -------- Helpers --------
 def init_state():
-    for key in ["user_profile","validated_cars","methods_info"]:
+    for key in ["user_profile","validated_cars","methods_info","fuel_price"]:
         if key not in st.session_state:
             st.session_state[key] = None
 
@@ -86,6 +83,7 @@ column_map_he = {
     "avg_fuel_consumption": "צריכת דלק ממוצעת (ק\"מ/ל')",
     "annual_fee": "אגרה שנתית (₪)",
     "annual_fuel_cost": "עלות דלק שנתית (₪)",
+    "total_annual_cost": "עלות כוללת שנתית (₪)",
     "reliability_score": "אמינות",
     "maintenance_cost": "עלות אחזקה (₪/שנה)",
     "safety_rating": "בטיחות",
@@ -177,6 +175,11 @@ profile["driver_gender"] = driver_gender
 profile["insurance_history"] = insurance_history
 profile["violations"] = violations
 
+# שדה לקביעת מחיר ליטר דלק
+fuel_price = st.number_input("מחיר ליטר דלק (₪)", min_value=1.0, max_value=20.0, value=7.0, step=0.1)
+st.session_state.fuel_price = fuel_price
+profile["fuel_price"] = fuel_price
+
 st.session_state.user_profile = profile
 
 # -------- שלב 2 --------
@@ -195,19 +198,21 @@ else:
         {json.dumps(profile, ensure_ascii=False, indent=2)}
 
         דרישות לפלט:
-        - החזר JSON עם שלושה שדות: "search_performed", "search_queries", "recommended_cars".
-        - כל רכב חייב לכלול:
-          brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
-          avg_fuel_consumption (ק\"מ/ל', מספר בלבד) + fuel_method
-          annual_fee (₪ לשנה, מספר בלבד) + fee_method
-          reliability_score (1–10) + reliability_method
-          maintenance_cost (₪/שנה) + maintenance_method
-          safety_rating (1–10) + safety_method
-          insurance_cost (₪/שנה) + insurance_method
-          resale_value (1–10) + resale_method
-          performance_score (1–10) + performance_method
-          comfort_features (1–10) + comfort_method
-          suitability (1–10) + suitability_method
+        1. החזר JSON יחיד עם שלושה שדות: "search_performed", "search_queries", "recommended_cars".
+        2. search_performed: True אם בוצע חיפוש אינטרנטי, אחרת False.
+        3. search_queries: מערך עם מחרוזות החיפוש שבוצעו בפועל.
+        4. recommended_cars: מערך של 5–10 רכבים. כל רכב חייב לכלול:
+           - brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
+           - avg_fuel_consumption (ק\"מ/ל', מספר בלבד) + fuel_method
+           - annual_fee (₪ לשנה, מספר בלבד) + fee_method
+           - reliability_score (מספר 1–10 בלבד) + reliability_method
+           - maintenance_cost (₪ לשנה, מספר בלבד) + maintenance_method
+           - safety_rating (מספר 1–10 בלבד) + safety_method
+           - insurance_cost (₪ לשנה, מספר בלבד) + insurance_method
+           - resale_value (מספר 1–10 בלבד) + resale_method
+           - performance_score (מספר 1–10 בלבד) + performance_method
+           - comfort_features (מספר 1–10 בלבד) + comfort_method
+           - suitability (מספר 1–10 בלבד) + suitability_method
         """
 
         with st.spinner("פונה לגימניי..."):
@@ -227,14 +232,29 @@ else:
                 parsed = {}
 
         if parsed and "recommended_cars" in parsed:
+            search_performed = parsed.get("search_performed", False)
+            search_queries = parsed.get("search_queries", [])
+
+            if search_performed and search_queries:
+                st.info("✅ בוצע חיפוש אינטרנטי לנתוני שוק עדכניים.")
+            else:
+                st.warning("⚠️ לא ברור אם בוצע חיפוש חי. ייתכן שהנתונים חלקיים.")
+
             cars_to_process = parsed["recommended_cars"]
             results_df, methods_info = clean_gemini_output(cars_to_process)
 
             if not results_df.empty:
-                # --- חישוב עלות דלק שנתית ---
+                # --- חישוב עלויות ---
                 results_df["annual_fuel_cost"] = (
                     profile["annual_km"] / results_df["avg_fuel_consumption"].replace(0, 1)
-                ) * FUEL_PRICE_NIS
+                ) * st.session_state.fuel_price
+
+                results_df["total_annual_cost"] = (
+                    results_df["annual_fuel_cost"] +
+                    results_df["maintenance_cost"] +
+                    results_df["insurance_cost"] +
+                    results_df["annual_fee"]
+                )
 
                 # --- טבלה בעברית ---
                 results_df_display = results_df.copy()
@@ -252,7 +272,8 @@ else:
                 # --- הסברים בעברית ---
                 st.markdown("### 📖 הסברים לכל פרמטר")
                 for i, method in enumerate(methods_info, 1):
-                    with st.expander(f"🔎 רכב {i} – הסברים"):
+                    car_name = f"{results_df.iloc[i-1]['brand']} {results_df.iloc[i-1]['model']} {results_df.iloc[i-1]['year']}"
+                    with st.expander(f"🔎 {car_name} – הסברים"):
                         for k, v in method.items():
                             field_he = method_map_he.get(k, k)
                             st.write(f"- **{field_he}:** {v}")
