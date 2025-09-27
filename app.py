@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה עם FitScore + Search Meta Validation
+# Car Advisor – גרסה עם FitScore + Search Meta Validation (תיקון float/str)
 # =========================================
 
 import streamlit as st
@@ -83,6 +83,13 @@ def clean_gemini_output(cars_raw, min_budget, max_budget):
 
 def calculate_fit_score(df, weights):
     """מחשב ציון FitScore (עד 100) לפי המשקולות האישיות."""
+
+    # המרה בטוחה ל-float (כי ג'מיני לפעמים מחזיר טקסט)
+    for col in ['reliability_score','resale_value','performance_score',
+                'comfort_features','suitability']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
     df['weighted_reliability']   = df['reliability_score'] * weights['reliability']
     df['weighted_resale']        = df['resale_value'] * weights['resale']
     df['weighted_performance']   = df['performance_score'] * weights['performance']
@@ -97,7 +104,11 @@ def calculate_fit_score(df, weights):
         df['weighted_suitability']
     )
 
-    df['FitScore'] = round(df['FitScore'] / df['FitScore'].max() * 100, 1)
+    if df['FitScore'].max() > 0:
+        df['FitScore'] = round(df['FitScore'] / df['FitScore'].max() * 100, 1)
+    else:
+        df['FitScore'] = 0
+
     return df.sort_values(by='FitScore', ascending=False)
 
 # -------- שלב 1: שאלון --------
