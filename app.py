@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה עם FitScore + חיפוש חי
+# Car Advisor – גרסה עם FitScore + Search Meta Validation
 # =========================================
 
 import streamlit as st
@@ -157,8 +157,7 @@ if not api_key:
     st.warning("לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה.")
 else:
     genai.configure(api_key=api_key)
-    model_name = "models/gemini-2.5-pro"
-    model = genai.GenerativeModel(model_name)
+    model = genai.GenerativeModel("models/gemini-2.5-pro")
 
     if st.button("🚀 בקש המלצות מגימניי"):
         prompt = f"""
@@ -166,63 +165,71 @@ else:
         {json.dumps(profile, ensure_ascii=False, indent=2)}
 
         דרישות לפלט:
-        1. החזר JSON בלבד.
+        1. החזר אובייקט JSON יחיד עם שלושה שדות ברמה הראשית:
+           - "search_performed": True/False
+           - "search_queries": מערך מחרוזות עם כל שאילתות החיפוש שבוצעו
+           - "recommended_cars": מערך של 5–10 רכבים
         2. כל רכב חייב לכלול: brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
-        3. בנוסף 8 ציונים (1–10) עם הסבר: reliability, maintenance_cost, safety_rating,
-           insurance_cost, resale_value, performance_score, comfort_features, suitability.
-        4. כל שדה *_method יסביר בקצרה איך חושב הציון.
-        5. החזר 5–10 רכבים בלבד שמתאימים לתקציב ולשנים שהוגדרו.
+        3. בנוסף: reliability_score, maintenance_cost, safety_rating,
+           insurance_cost, resale_value, performance_score, comfort_features, suitability
+           וכל אחד מהם עם שדה *_method שמסביר איך חושב.
+        4. חובה להשתמש בנתוני שוק חיים ועדכניים כדי לקבוע price_range_nis ו-insurance_cost.
+        5. החזר אך ורק JSON חוקי, ללא טקסט חיצוני.
         """
 
         with st.spinner("פונה לגימניי..."):
             try:
-                resp = model.generate_content(
-                    prompt,
-                    config={
-                        "response_mime_type": "application/json",  # ✅ כפייה על JSON
-                        "tools": [{"google_search": {}}],          # ✅ הפעלת חיפוש חי
-                    }
-                )
+                resp = model.generate_content(prompt)
                 text = resp.candidates[0].content.parts[0].text.strip()
-
                 if text.startswith("```"):
                     text = text.strip("`").replace("json\n", "").replace("json", "").strip()
 
                 try:
                     cars_from_gemini = json.loads(text)
-                    st.subheader("📋 פלט ראשוני מגימניי")
-                    st.dataframe(pd.DataFrame(cars_from_gemini))
+
+                    if isinstance(cars_from_gemini, dict) and "recommended_cars" in cars_from_gemini:
+                        search_performed = cars_from_gemini.get("search_performed", False)
+                        search_queries = cars_from_gemini.get("search_queries", [])
+
+                        if search_performed and search_queries:
+                            st.info("✅ אימות נתונים: בוצע חיפוש אינטרנט לנתוני שוק עדכניים.")
+                            st.code(search_queries)
+                        else:
+                            st.warning("⚠️ לא ברור אם בוצע חיפוש לנתונים עדכניים (סביר שהמודל השתמש בידע פנימי).")
+
+                        cars_to_process = cars_from_gemini.get("recommended_cars", [])
+                        if cars_to_process:
+                            min_budget, max_budget = profile["budget_nis"]
+                            results_df, methods_info = clean_gemini_output(cars_to_process, min_budget, max_budget)
+
+                            if not results_df.empty:
+                                ranked_df = calculate_fit_score(results_df.copy(), profile["weights"])
+                                st.session_state.ranked_cars = ranked_df
+                                st.session_state.methods_info = methods_info
+
+                                st.success(f"✅ נמצאו {len(ranked_df)} רכבים אחרי סינון ודירוג.")
+                                st.subheader("🏆 דירוג סופי (FitScore)")
+                                st.dataframe(
+                                    ranked_df.reset_index(drop=True).style.bar(
+                                        subset=['FitScore'], color='#5cb85c'
+                                    )
+                                )
+
+                                st.markdown("### 📖 נימוקים לכל רכב")
+                                for i, (record, method) in enumerate(zip(ranked_df.to_dict(orient="records"), methods_info), 1):
+                                    st.markdown(f"**🚘 {record.get('brand','')} {record.get('model','')} ({record.get('year','')}) — ⭐ {record.get('FitScore','N/A')}/100**")
+                                    for k, v in method.items():
+                                        st.write(f"- {k}: {v}")
+                            else:
+                                st.warning("⚠️ לא נמצאו רכבים מתאימים.")
+                        else:
+                            st.error("❌ recommended_cars ריק – אין רכבים לעיבוד.")
+                    else:
+                        st.error("⚠️ מבנה הפלט מגימניי אינו תקין. חסר 'recommended_cars'.")
+
                 except json.JSONDecodeError:
-                    st.error("⚠️ Gemini לא החזיר JSON נקי. להלן הפלט:")
+                    st.error("⚠️ Gemini לא החזיר JSON חוקי. להלן הפלט:")
                     st.code(text)
-                    cars_from_gemini = []
 
             except Exception as e:
                 st.error(f"שגיאה בקריאת הפלט מגימניי: {e}")
-                cars_from_gemini = []
-
-        # -------- שלב 3: FitScore --------
-        if cars_from_gemini:
-            min_budget, max_budget = profile["budget_nis"]
-            results_df, methods_info = clean_gemini_output(cars_from_gemini, min_budget, max_budget)
-
-            if not results_df.empty:
-                ranked_df = calculate_fit_score(results_df.copy(), profile["weights"])
-                st.session_state.ranked_cars = ranked_df
-                st.session_state.methods_info = methods_info
-
-                st.success(f"✅ נמצאו {len(ranked_df)} רכבים אחרי סינון ודירוג.")
-                st.subheader("🏆 דירוג סופי (FitScore)")
-                st.dataframe(
-                    ranked_df.reset_index(drop=True).style.bar(
-                        subset=['FitScore'], color='#5cb85c'
-                    )
-                )
-
-                st.markdown("### 📖 נימוקים לכל רכב")
-                for i, (record, method) in enumerate(zip(ranked_df.to_dict(orient="records"), methods_info), 1):
-                    st.markdown(f"**🚘 {record.get('brand','')} {record.get('model','')} ({record.get('year','')}) — ⭐ {record.get('FitScore','N/A')}/100**")
-                    for k, v in method.items():
-                        st.write(f"- {k}: {v}")
-            else:
-                st.warning("⚠️ לא נמצאו רכבים מתאימים.")
