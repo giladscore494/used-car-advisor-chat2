@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה עם 16 פרמטרים והסברים, מוגבל לשוק הישראלי
+# Car Advisor – גרסה עם 16 פרמטרים והסברים, שאלון מורחב ושוק ישראלי בלבד
 # =========================================
 
 import streamlit as st
@@ -14,12 +14,14 @@ st.set_page_config(page_title="Car Advisor", page_icon="🚗", layout="wide")
 
 # -------- Helpers --------
 def init_state():
-    for key in ["user_profile","validated_cars","methods_info"]:
+    for key in ["user_profile", "validated_cars", "methods_info"]:
         if key not in st.session_state:
             st.session_state[key] = None
 
 def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
-                      turbo_required, main_use, annual_km, driver_age):
+                      turbo_required, main_use, annual_km, driver_age,
+                      family_size, cargo_need, safety_required, trim_level,
+                      weights, body_style, driving_style, excluded_colors):
     return {
         "budget_nis": [float(budget_min), float(budget_max)],
         "years": [int(years_range[0]), int(years_range[1])],
@@ -29,6 +31,14 @@ def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
         "main_use": main_use.strip(),
         "annual_km": int(annual_km),
         "driver_age": int(driver_age),
+        "family_size": family_size,
+        "cargo_need": cargo_need,
+        "safety_required": safety_required,
+        "trim_level": trim_level,
+        "weights": weights,
+        "body_style": body_style,
+        "driving_style": driving_style,
+        "excluded_colors": excluded_colors
     }
 
 # ניקוי פלט Gemini
@@ -65,11 +75,11 @@ def clean_gemini_output(cars_raw, min_budget, max_budget):
 
     return pd.DataFrame(records), methods
 
-# -------- שלב 1: שאלון --------
+# -------- שלב 1: שאלון מורחב --------
 init_state()
 st.title("🚗 Car Advisor – ייעוץ רכב")
 
-st.markdown("### שלב 1: שאלון")
+st.markdown("### שלב 1: נתוני בסיס")
 col1, col2, col3 = st.columns([1,1,1])
 with col1: budget_min = st.number_input("תקציב מינימום (₪)", min_value=0, step=1000, value=40000)
 with col2: budget_max = st.number_input("תקציב מקסימום (₪)", min_value=0, step=1000, value=65000)
@@ -78,7 +88,7 @@ with col3:
     with ymin: year_min = st.number_input("שנתון מינימום", min_value=1990, max_value=datetime.now().year, value=2015)
     with ymax: year_max = st.number_input("שנתון מקסימום", min_value=1990, max_value=datetime.now().year, value=2019)
 
-fuels = st.multiselect("סוגי דלק מועדפים", ["gasoline","hybrid","hybrid-diesel","diesel","electric"], default=["gasoline"])
+fuels = st.multiselect("סוגי דלק מועדפים", ["gasoline","diesel","hybrid","electric","hybrid-diesel"], default=["gasoline"])
 gears = st.multiselect("תיבת הילוכים", ["automatic","manual"], default=["automatic"])
 turbo_choice = st.selectbox("טורבו?", ["any","yes","no"], index=1)
 
@@ -87,13 +97,55 @@ with c4: main_use = st.text_input("שימוש עיקרי", value="נסיעה ד�
 with c5: annual_km = st.number_input("נסועה שנתית (ק״מ)", min_value=0, step=1000, value=15000)
 with c6: driver_age = st.number_input("גיל נהג", min_value=16, max_value=100, value=21)
 
-profile = make_user_profile(budget_min, budget_max, [year_min, year_max],
-                            fuels, gears, turbo_choice, main_use, annual_km, driver_age)
+st.markdown("### שלב 2: נתונים קריטיים ל-FitScore")
+col7, col8 = st.columns([1,1])
+with col7:
+    family_size = st.selectbox("מספר נוסעים קבוע (מבוגרים + ילדים)", ["1-2","3-4","5+"])
+with col8:
+    cargo_need = st.select_slider("דרישת נפח מטען", options=["קטן","בינוני","גדול"], value="בינוני")
+
+col9, col10 = st.columns([1,1])
+with col9:
+    safety_required = st.radio("מערכות בטיחות אקטיביות חובה?", ["כן","לא"], index=0)
+with col10:
+    trim_level = st.selectbox("רמת אבזור פנימי", ["בסיסי","סטנדרטי","עשיר"], index=1)
+
+st.markdown("### שלב 3: העדפות אישיות וסדר עדיפויות")
+st.markdown("#### סדר עדיפויות (1 = פחות חשוב, 5 = הכי חשוב)")
+reliability_weight = st.slider("אמינות ועלויות תחזוקה", 1, 5, 5)
+resale_weight = st.slider("סחירות ושמירת ערך", 1, 5, 3)
+fuel_weight = st.slider("חיסכון בדלק", 1, 5, 4)
+performance_weight = st.slider("ביצועים / כוח מנוע", 1, 5, 4)
+comfort_weight = st.slider("נוחות / שקט נסיעה", 1, 5, 3)
+
+col11, col12 = st.columns([1,1])
+with col11:
+    body_style = st.selectbox("סגנון גוף מועדף", ["לא משנה","קרוסאובר/ג'יפון","סדאן","האצ'בק"], index=0)
+with col12:
+    driving_style = st.selectbox("אופי הנהיגה העיקרי", ["רגוע ונינוח","דינמי וספורטיבי"], index=1)
+
+excluded_colors = st.text_input("צבעים לפסילה (רשום פסיק בין צבעים)", value="")
+excluded_colors = [c.strip() for c in excluded_colors.split(",") if c.strip()]
+
+# בניית פרופיל
+weights = {
+    "reliability": reliability_weight,
+    "resale": resale_weight,
+    "fuel": fuel_weight,
+    "performance": performance_weight,
+    "comfort": comfort_weight
+}
+profile = make_user_profile(
+    budget_min, budget_max, [year_min, year_max],
+    fuels, gears, turbo_choice, main_use, annual_km, driver_age,
+    family_size, cargo_need, safety_required, trim_level,
+    weights, body_style, driving_style, excluded_colors
+)
 st.session_state.user_profile = profile
 st.json(profile)
 
 # -------- שלב 2: Gemini --------
-st.markdown("### שלב 2: Gemini – המלצות ראשוניות")
+st.markdown("### שלב 4: Gemini – המלצות רכבים")
 api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
 if not api_key:
     st.warning("לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה.")
@@ -102,9 +154,9 @@ else:
     model_name = "models/gemini-2.5-pro"
     model = genai.GenerativeModel(model_name)
 
-    if st.button("🚀 בקש המלצות מגימניי"):
+    if st.button("🚀 בקש המלצות מג'מיני"):
         prompt = f"""
-        אני צריך המלצות לרכבים. אלה התכונות שהלקוח חיפש:
+        אני צריך המלצות לרכבים עבור המשתמש הבא:
         {json.dumps(profile, ensure_ascii=False, indent=2)}
 
         דרישות לפלט:
