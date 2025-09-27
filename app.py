@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה מלאה עם חיפוש חי, FitScore ודירוג סופי
+# Car Advisor – גרסה עם FitScore + חיפוש חי
 # =========================================
 
 import streamlit as st
@@ -21,7 +21,9 @@ def init_state():
 def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
                       turbo_required, main_use, annual_km, driver_age,
                       family_size, cargo_need, safety_required, trim_level,
-                      weights, body_style, driving_style, excluded_colors):
+                      reliability_weight, resale_weight, fuel_weight,
+                      performance_weight, comfort_weight,
+                      body_style, driving_style, excluded_colors):
     return {
         "budget_nis": [float(budget_min), float(budget_max)],
         "years": [int(years_range[0]), int(years_range[1])],
@@ -35,7 +37,13 @@ def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
         "cargo_need": cargo_need,
         "safety_required": safety_required,
         "trim_level": trim_level,
-        "weights": weights,
+        "weights": {
+            "reliability": reliability_weight,
+            "resale": resale_weight,
+            "fuel": fuel_weight,
+            "performance": performance_weight,
+            "comfort": comfort_weight,
+        },
         "body_style": body_style,
         "driving_style": driving_style,
         "excluded_colors": excluded_colors,
@@ -61,7 +69,6 @@ def clean_gemini_output(cars_raw, min_budget, max_budget):
         if not price_ok:
             continue
 
-        # פיצול ערכים ומטודות
         record, method = {}, {}
         for k, v in car.items():
             if k.endswith("_method"):
@@ -75,13 +82,12 @@ def clean_gemini_output(cars_raw, min_budget, max_budget):
     return pd.DataFrame(records), methods
 
 def calculate_fit_score(df, weights):
-    """מחשב ציון התאמה (FitScore) לכל רכב על בסיס ציוני Gemini ומשקולות המשתמש."""
-
-    df['weighted_reliability']   = df['reliability_score']   * weights['reliability']
-    df['weighted_resale']        = df['resale_value']        * weights['resale']
-    df['weighted_performance']   = df['performance_score']   * weights['performance']
-    df['weighted_comfort']       = df['comfort_features']    * weights['comfort']
-    df['weighted_suitability']   = df['suitability']         * weights['fuel']   # שימוש בציון התאמה כחיסכון
+    """מחשב ציון FitScore (עד 100) לפי המשקולות האישיות."""
+    df['weighted_reliability']   = df['reliability_score'] * weights['reliability']
+    df['weighted_resale']        = df['resale_value'] * weights['resale']
+    df['weighted_performance']   = df['performance_score'] * weights['performance']
+    df['weighted_comfort']       = df['comfort_features'] * weights['comfort']
+    df['weighted_suitability']   = df['suitability'] * weights['fuel']
 
     df['FitScore'] = (
         df['weighted_reliability'] +
@@ -91,58 +97,8 @@ def calculate_fit_score(df, weights):
         df['weighted_suitability']
     )
 
-    # נרמול ל־100
-    max_score = (10 * sum(weights.values()))
-    df['FitScore'] = round(df['FitScore'] / max_score * 100, 1)
-
-    df = df.sort_values(by='FitScore', ascending=False)
-    return df
-
-# -------- עיצוב כרטיסים --------
-st.markdown("""
-<style>
-.car-card {
-    background-color: #ffffff;
-    border: 1px solid #e0e0e0;
-    border-radius: 12px;
-    padding: 16px 20px;
-    margin-bottom: 20px;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.05);
-}
-.car-card h3 {
-    margin-top: 0;
-    margin-bottom: 12px;
-    color: #222222;
-}
-.car-card ul {
-    padding-left: 0;
-    margin: 0;
-    list-style-type: none;
-}
-.car-card li {
-    margin-bottom: 8px;
-    font-size: 15px;
-    display: flex;
-    align-items: center;
-}
-.label {
-    padding: 3px 8px;
-    border-radius: 6px;
-    font-weight: bold;
-    color: white;
-    margin-right: 8px;
-    font-size: 13px;
-}
-.label-reliability { background-color: #4caf50; }
-.label-maintenance { background-color: #ff9800; }
-.label-safety { background-color: #f44336; }
-.label-insurance { background-color: #2196f3; }
-.label-resale { background-color: #9c27b0; }
-.label-performance { background-color: #ffc107; color:#000; }
-.label-comfort { background-color: #e91e63; }
-.label-suitability { background-color: #009688; }
-</style>
-""", unsafe_allow_html=True)
+    df['FitScore'] = round(df['FitScore'] / df['FitScore'].max() * 100, 1)
+    return df.sort_values(by='FitScore', ascending=False)
 
 # -------- שלב 1: שאלון --------
 init_state()
@@ -166,36 +122,32 @@ with c4: main_use = st.text_input("שימוש עיקרי", value="נסיעה ד�
 with c5: annual_km = st.number_input("נסועה שנתית (ק״מ)", min_value=0, step=1000, value=15000)
 with c6: driver_age = st.number_input("גיל נהג", min_value=16, max_value=100, value=21)
 
-# שאלות נוספות
+st.markdown("#### נתוני משפחה ובטיחות")
 family_size = st.selectbox("מספר נוסעים קבוע", ["1-2","3-4","5+"])
-cargo_need = st.selectbox("נפח מטען", ["קטן","בינוני","גדול"])
-safety_required = st.selectbox("מערכות בטיחות אקטיביות חובה?", ["כן","לא"])
-trim_level = st.selectbox("רמת אבזור פנימי", ["בסיסי","סטנדרטי","עשיר"])
-body_style = st.selectbox("סגנון גוף מועדף", ["כל סוג","קרוסאובר","סדאן","האצ'בק"])
-driving_style = st.selectbox("אופי הנהיגה", ["רגוע ונינוח","דינמי וספורטיבי"])
-excluded_colors = st.text_input("צבעים לפסילה (רשימה מופרדת בפסיקים)", value="").split(",")
+cargo_need = st.selectbox("דרישת תא מטען", ["קטן","בינוני","גדול"])
+safety_required = st.selectbox("חובה מערכות בטיחות אקטיביות?", ["כן","לא"])
+trim_level = st.selectbox("רמת אבזור", ["בסיסי","סטנדרטי","עשיר"])
 
-# סדר עדיפויות (משקולות)
 st.markdown("#### סדר עדיפויות (1–5)")
-c7,c8,c9,c10,c11 = st.columns(5)
-with c7: reliability_weight = st.slider("אמינות",1,5,5)
-with c8: resale_weight = st.slider("שמירת ערך",1,5,3)
-with c9: fuel_weight = st.slider("חיסכון בדלק",1,5,4)
-with c10: performance_weight = st.slider("ביצועים",1,5,3)
-with c11: comfort_weight = st.slider("נוחות",1,5,2)
+reliability_weight = st.slider("אמינות", 1, 5, 5)
+resale_weight = st.slider("שמירת ערך", 1, 5, 3)
+fuel_weight = st.slider("חיסכון בדלק", 1, 5, 4)
+performance_weight = st.slider("ביצועים", 1, 5, 3)
+comfort_weight = st.slider("נוחות", 1, 5, 3)
 
-weights = {
-    "reliability": reliability_weight,
-    "resale": resale_weight,
-    "fuel": fuel_weight,
-    "performance": performance_weight,
-    "comfort": comfort_weight
-}
+st.markdown("#### העדפות נוספות")
+body_style = st.selectbox("סגנון רכב מועדף", ["כל סוג","האצ'בק","סדאן","קרוסאובר/ג'יפון"])
+driving_style = st.selectbox("אופי נהיגה עיקרי", ["רגוע ונינוח","דינמי וספורטיבי"])
+excluded_colors = st.text_input("צבעים לפסילה (רשות)", value="")
 
-profile = make_user_profile(budget_min, budget_max, [year_min, year_max],
-                            fuels, gears, turbo_choice, main_use, annual_km, driver_age,
-                            family_size, cargo_need, safety_required, trim_level,
-                            weights, body_style, driving_style, excluded_colors)
+profile = make_user_profile(
+    budget_min, budget_max, [year_min, year_max],
+    fuels, gears, turbo_choice, main_use, annual_km, driver_age,
+    family_size, cargo_need, safety_required, trim_level,
+    reliability_weight, resale_weight, fuel_weight,
+    performance_weight, comfort_weight,
+    body_style, driving_style, excluded_colors.split(",")
+)
 st.session_state.user_profile = profile
 
 # -------- שלב 2: Gemini --------
@@ -210,99 +162,67 @@ else:
 
     if st.button("🚀 בקש המלצות מגימניי"):
         prompt = f"""
-        אני צריך המלצות לרכבים. אלה התכונות שהלקוח חיפש:
+        אני צריך המלצות לרכבים מהשוק הישראלי בלבד. אלה הנתונים של הלקוח:
         {json.dumps(profile, ensure_ascii=False, indent=2)}
 
         דרישות לפלט:
-        1. החזר מערך JSON בלבד (ללא טקסט חיצוני).
-        2. כל רכב חייב לכלול בדיוק את 16 הפרמטרים הבאים + שדה הסבר נלווה:
-           - brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
-           - reliability_score (1–10) + reliability_method
-           - maintenance_cost (₪ לשנה) + maintenance_method
-           - safety_rating (1–10) + safety_method
-           - insurance_cost (₪ לשנה) + insurance_method
-           - resale_value (1–10) + resale_method
-           - performance_score (1–10) + performance_method
-           - comfort_features (1–10) + comfort_method
-           - suitability (1–10) + suitability_method
-        3. כל שדה *_method יסביר בקצרה איך חושב הערך.
-        4. החזר 5–10 רכבים בלבד.
-        5. חובה להחזיר רכבים שנמכרים בפועל בישראל (שוק הרכב הישראלי בלבד).
-        6. אל תחזיר רכבים שלא זמינים בארץ.
-        7. חובה לעמוד בטווח התקציב והשנתון שהמשתמש הזין.
+        1. החזר JSON בלבד.
+        2. כל רכב חייב לכלול: brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
+        3. בנוסף 8 ציונים (1–10) עם הסבר: reliability, maintenance_cost, safety_rating,
+           insurance_cost, resale_value, performance_score, comfort_features, suitability.
+        4. כל שדה *_method יסביר בקצרה איך חושב הציון.
+        5. החזר 5–10 רכבים בלבד שמתאימים לתקציב ולשנים שהוגדרו.
         """
 
         with st.spinner("פונה לגימניי..."):
             try:
                 resp = model.generate_content(
                     prompt,
-                    generation_config={
-                        "response_mime_type": "application/json"
-                    },
-                    tools=[{"google_search": {}}]
+                    config={
+                        "response_mime_type": "application/json",  # ✅ כפייה על JSON
+                        "tools": [{"google_search": {}}],          # ✅ הפעלת חיפוש חי
+                    }
                 )
                 text = resp.candidates[0].content.parts[0].text.strip()
 
-                cars_from_gemini = json.loads(text)
+                if text.startswith("```"):
+                    text = text.strip("`").replace("json\n", "").replace("json", "").strip()
 
-                st.subheader("📋 פלט ראשוני מגימניי")
-                st.dataframe(pd.DataFrame(cars_from_gemini))
+                try:
+                    cars_from_gemini = json.loads(text)
+                    st.subheader("📋 פלט ראשוני מגימניי")
+                    st.dataframe(pd.DataFrame(cars_from_gemini))
+                except json.JSONDecodeError:
+                    st.error("⚠️ Gemini לא החזיר JSON נקי. להלן הפלט:")
+                    st.code(text)
+                    cars_from_gemini = []
 
             except Exception as e:
                 st.error(f"שגיאה בקריאת הפלט מגימניי: {e}")
                 cars_from_gemini = []
 
-        # ✅ ניקוי, סינון וחישוב FitScore
+        # -------- שלב 3: FitScore --------
         if cars_from_gemini:
             min_budget, max_budget = profile["budget_nis"]
             results_df, methods_info = clean_gemini_output(cars_from_gemini, min_budget, max_budget)
 
             if not results_df.empty:
-                st.session_state.validated_cars = results_df
-                st.session_state.methods_info = methods_info
-
-                # שלב 3 – חישוב FitScore
                 ranked_df = calculate_fit_score(results_df.copy(), profile["weights"])
                 st.session_state.ranked_cars = ranked_df
+                st.session_state.methods_info = methods_info
 
-                st.subheader("🏆 שלב 3: דירוג סופי (FitScore)")
-                st.markdown("הרכבים מדורגים לפי סדרי העדיפויות האישיים שלך:")
-                st.dataframe(ranked_df.reset_index(drop=True).style.bar(
-                    subset=['FitScore'], color='#5cb85c'
-                ))
+                st.success(f"✅ נמצאו {len(ranked_df)} רכבים אחרי סינון ודירוג.")
+                st.subheader("🏆 דירוג סופי (FitScore)")
+                st.dataframe(
+                    ranked_df.reset_index(drop=True).style.bar(
+                        subset=['FitScore'], color='#5cb85c'
+                    )
+                )
 
-                # הצגת ההסברים
-                st.markdown("## 📖 נימוקים לכל רכב")
-                icons = {
-                    "reliability_method": ("🛡️ אמינות", "label-reliability"),
-                    "maintenance_method": ("🔧 תחזוקה", "label-maintenance"),
-                    "safety_method": ("🧯 בטיחות", "label-safety"),
-                    "insurance_method": ("💰 ביטוח", "label-insurance"),
-                    "resale_method": ("📉 שמירת ערך", "label-resale"),
-                    "performance_method": ("⚡ ביצועים", "label-performance"),
-                    "comfort_method": ("🛋️ נוחות", "label-comfort"),
-                    "suitability_method": ("🎯 התאמה כוללת", "label-suitability"),
-                }
-
+                st.markdown("### 📖 נימוקים לכל רכב")
                 for i, (record, method) in enumerate(zip(ranked_df.to_dict(orient="records"), methods_info), 1):
-                    car_title = f"🚘 {record.get('brand','')} {record.get('model','')} ({record.get('year','')})"
-                    fit_score = record.get("FitScore", "N/A")
-
-                    explanations = "<ul>"
-                    for key, (label, css_class) in icons.items():
-                        if key in method:
-                            explanations += f"""
-                            <li>
-                                <span class="label {css_class}">{label}</span> {method[key]}
-                            </li>
-                            """
-                    explanations += "</ul>"
-
-                    st.markdown(f"""
-                    <div class="car-card">
-                        <h3>{car_title} — ⭐ {fit_score}/100</h3>
-                        {explanations}
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.markdown(f"**🚘 {record.get('brand','')} {record.get('model','')} ({record.get('year','')}) — ⭐ {record.get('FitScore','N/A')}/100**")
+                    for k, v in method.items():
+                        st.write(f"- {k}: {v}")
             else:
-                st.warning("⚠️ לא נמצאו רכבים שעומדים בתקציב.")
+                st.warning("⚠️ לא נמצאו רכבים מתאימים.")
