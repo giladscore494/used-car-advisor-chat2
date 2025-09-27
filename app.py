@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה מאוחדת עם Gemini 2.5 Pro (מתוקן)
+# Car Advisor – גרסה מאוחדת עם Gemini 2.5 Pro (תיקון JSON)
 # =========================================
 
 import streamlit as st
@@ -92,13 +92,32 @@ else:
         3. סנן רק רכבים בתקציב.
         4. דרג לפי חיסכון, אמינות, עלויות תחזוקה.
         5. החזר 5–10 רכבים בלבד.
-        6. החזר בפורמט JSON בלבד עם:
-           brand, model, year, fuel, gear, turbo, price_range_nis, notes
+        6. החזר אך ורק בפורמט JSON תקין, בלי טקסט נוסף, לדוגמה:
+        [
+          {{
+            "brand": "Toyota",
+            "model": "Corolla",
+            "year": 2018,
+            "fuel": "gasoline",
+            "gear": "automatic",
+            "turbo": false,
+            "price_range_nis": [55000, 65000],
+            "notes": "אמינה, זולה לתחזוקה"
+          }}
+        ]
         """
         try:
             resp = model.generate_content(prompt)
-            text = resp.candidates[0].content.parts[0].text
-            cars_from_gemini = json.loads(text)
+            text = resp.candidates[0].content.parts[0].text.strip()
+
+            # נסיון לפענח JSON
+            try:
+                cars_from_gemini = json.loads(text)
+            except json.JSONDecodeError:
+                st.error("⚠️ הפלט מגימניי לא היה JSON תקין. להלן מה שהתקבל:")
+                st.code(text)
+                cars_from_gemini = []
+
         except Exception as e:
             st.error(f"שגיאה בקריאת הפלט מגימניי: {e}")
             cars_from_gemini = []
