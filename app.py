@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה מאוחדת ומעודכנת (שלבים 1–5)
+# Car Advisor – גרסה עם בדיקת מודלים זמינים
 # =========================================
 
 import streamlit as st
@@ -80,7 +80,20 @@ if not api_key:
     st.warning("לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה.")
 else:
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
+
+    # כפתור להצגת רשימת מודלים זמינים
+    if st.button("📋 הצג מודלים זמינים מגימניי"):
+        try:
+            models = genai.list_models()
+            st.write("מודלים זמינים אצלך:")
+            for m in models:
+                st.write(m.name)
+        except Exception as e:
+            st.error(f"שגיאה בקבלת רשימת מודלים: {e}")
+
+    # כאן תצטרך לשים את השם שהתקבל מ-list_models()
+    model_name = "models/gemini-1.5-flash"  # שנה לשם התקף אצלך
+    model = genai.GenerativeModel(model_name)
 
     if st.button("🚀 בקש המלצות מגימניי"):
         prompt = f"""
