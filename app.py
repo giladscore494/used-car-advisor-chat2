@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה מאוחדת עם Gemini 2.5 Pro (תיקון JSON)
+# Car Advisor – גרסה מאוחדת עם Gemini 2.5 Pro (תיקון תגיות JSON)
 # =========================================
 
 import streamlit as st
@@ -110,11 +110,16 @@ else:
             resp = model.generate_content(prompt)
             text = resp.candidates[0].content.parts[0].text.strip()
 
+            # ניקוי תגיות ```json או ```
+            if text.startswith("```"):
+                text = text.strip("`")
+                text = text.replace("json\n", "").replace("json", "").strip()
+
             # נסיון לפענח JSON
             try:
                 cars_from_gemini = json.loads(text)
             except json.JSONDecodeError:
-                st.error("⚠️ הפלט מגימניי לא היה JSON תקין. להלן מה שהתקבל:")
+                st.error("⚠️ הפלט מגימניי לא היה JSON טהור. להלן מה שהתקבל:")
                 st.code(text)
                 cars_from_gemini = []
 
