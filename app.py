@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה סופית עם חיפוש אינטרנטי חובה
+# Car Advisor – גרסה סופית עם גרף עלות כוללת
 # =========================================
 
 import streamlit as st
@@ -300,6 +300,13 @@ else:
 
                 # דיסקליימר
                 st.markdown("⚠️ **הבהרה חשובה**: הנתונים הם הערכה גסה של AI בלבד.", unsafe_allow_html=True)
+
+                # --- גרף השוואה ---
+                st.markdown("### 📊 השוואת עלות כוללת שנתית")
+                chart_df = results_df_display[["מותג", "דגם", "שנה", "עלות כוללת שנתית (₪)"]].copy()
+                chart_df["רכב"] = chart_df["מותג"] + " " + chart_df["דגם"] + " " + chart_df["שנה"].astype(str)
+                chart_df = chart_df.set_index("רכב")
+                st.bar_chart(chart_df["עלות כוללת שנתית (₪)"])
 
                 # --- הסברים בעברית ---
                 st.markdown("### 📖 הסברים לכל פרמטר")
