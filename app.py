@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה עם נרמול, ניקוי פלט Gemini והצגת ציוני התאמה
+# Car Advisor – גרסה עם 16 פרמטרים והסברים, מוגבל לשוק הישראלי
 # =========================================
 
 import streamlit as st
@@ -9,13 +9,12 @@ import pandas as pd
 import json, os
 from datetime import datetime
 import google.generativeai as genai
-from rapidfuzz import fuzz
 
 st.set_page_config(page_title="Car Advisor", page_icon="🚗", layout="wide")
 
 # -------- Helpers --------
 def init_state():
-    for key in ["inventory_df","user_profile","validated_cars"]:
+    for key in ["user_profile","validated_cars","methods_info"]:
         if key not in st.session_state:
             st.session_state[key] = None
 
@@ -32,56 +31,14 @@ def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
         "driver_age": int(driver_age),
     }
 
-# פונקציות נרמול
-def normalize_fuel(fuel: str) -> str:
-    mapping = {
-        "gasoline": "gasoline",
-        "בנזין": "gasoline",
-        "diesel": "diesel",
-        "דיזל": "diesel",
-        "hybrid": "hybrid",
-        "היברידי-בנזין": "hybrid",
-        "hybrid-diesel": "hybrid-diesel",
-        "היברידי-דיזל": "hybrid-diesel",
-        "electric": "electric",
-        "חשמלי": "electric"
-    }
-    return mapping.get(str(fuel).lower().strip(), fuel)
-
-def normalize_gear(gear: str) -> str:
-    mapping = {
-        "automatic": "automatic",
-        "אוטומט": "automatic",
-        "ידני": "manual",
-        "manual": "manual",
-        "1": "automatic",
-        "0": "manual"
-    }
-    return mapping.get(str(gear).lower().strip(), gear)
-
-def flexible_match(a, b):
-    if not a or not b:
-        return 0
-    return max(
-        fuzz.ratio(str(a).lower(), str(b).lower()),
-        fuzz.partial_ratio(str(a).lower(), str(b).lower()),
-        fuzz.token_sort_ratio(str(a).lower(), str(b).lower())
-    )
-
 # ניקוי פלט Gemini
-def clean_gemini_output(cars_raw, df_inv, min_budget, max_budget):
-    cleaned = []
+def clean_gemini_output(cars_raw, min_budget, max_budget):
+    records, methods = [], []
     for car in cars_raw:
         if not isinstance(car, dict):
             continue
 
-        brand = str(car.get("brand","")).strip()
-        model = str(car.get("model","")).strip()
-        year = int(car.get("year",0)) if str(car.get("year","")).isdigit() else None
-        fuel = normalize_fuel(car.get("fuel",""))
-        gear = normalize_gear(car.get("gear",""))
-
-        # מחיר (טווח)
+        # סינון לפי תקציב
         price_min, price_max = None, None
         if isinstance(car.get("price_range_nis"), list) and len(car["price_range_nis"]) == 2:
             try:
@@ -89,44 +46,26 @@ def clean_gemini_output(cars_raw, df_inv, min_budget, max_budget):
             except Exception:
                 pass
 
-        # השוואה מול המאגר
-        best_brand_sim, best_model_sim = 0, 0
-        found_match = False
-        for _, row in df_inv.iterrows():
-            brand_sim = flexible_match(brand, row["brand"])
-            model_sim = flexible_match(model, row["model"])
-            year_match = (year and row["year"] == year)
-            fuel_match = (not fuel or fuel == normalize_fuel(row["fuel"]))
-            gear_match = (not gear or gear == normalize_gear(row["automatic"]))
-
-            if brand_sim > best_brand_sim: best_brand_sim = brand_sim
-            if model_sim > best_model_sim: best_model_sim = model_sim
-
-            if brand_sim >= 70 and model_sim >= 65 and year_match and fuel_match and gear_match:
-                found_match = True
-                break
-
-        # בדיקת תקציב
         price_ok = True
         if price_min and price_max:
             price_ok = (price_min >= min_budget and price_max <= max_budget)
+        if not price_ok:
+            continue
 
-        if found_match and price_ok:
-            cleaned.append({
-                "brand": brand,
-                "model": model,
-                "year": year,
-                "fuel": fuel,
-                "gear": gear,
-                "price_min": price_min,
-                "price_max": price_max,
-                "brand_sim": best_brand_sim,
-                "model_sim": best_model_sim
-            })
+        # פיצול ערכים ומטודות
+        record, method = {}, {}
+        for k, v in car.items():
+            if k.endswith("_method"):
+                method[k] = v
+            else:
+                record[k] = v
 
-    return pd.DataFrame(cleaned)
+        records.append(record)
+        methods.append(method)
 
-# -------- שלב 1: שאלון + מאגר --------
+    return pd.DataFrame(records), methods
+
+# -------- שלב 1: שאלון --------
 init_state()
 st.title("🚗 Car Advisor – ייעוץ רכב")
 
@@ -153,24 +92,7 @@ profile = make_user_profile(budget_min, budget_max, [year_min, year_max],
 st.session_state.user_profile = profile
 st.json(profile)
 
-# --- טעינה אוטומטית של המאגר ---
-st.markdown("### שלב 1ב: טעינת מאגר (אוטומטי)")
-default_path = "car_models_israel_clean.csv"
-if os.path.exists(default_path):
-    df = pd.read_csv(default_path, encoding="utf-8-sig")
-
-    # נרמול דלק והילוכים
-    if df["fuel"].dtype == "object":
-        df["fuel"] = df["fuel"].map(normalize_fuel).fillna(df["fuel"])
-    if df["automatic"].dtype in ["int64","float64"]:
-        df["automatic"] = df["automatic"].apply(lambda x: "automatic" if x==1 else "manual")
-
-    st.session_state.inventory_df = df
-    st.success(f"מאגר ברירת מחדל נטען ({len(df)} שורות, {df['brand'].nunique()} מותגים).")
-else:
-    st.error("❌ לא נמצא קובץ car_models_israel_clean.csv בתיקייה!")
-
-# -------- שלב 2: Gemini + סינון --------
+# -------- שלב 2: Gemini --------
 st.markdown("### שלב 2: Gemini – המלצות ראשוניות")
 api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
 if not api_key:
@@ -185,19 +107,23 @@ else:
         אני צריך המלצות לרכבים. אלה התכונות שהלקוח חיפש:
         {json.dumps(profile, ensure_ascii=False, indent=2)}
 
-        שלבים:
-        1. חשוב לפי הנתונים בשאלון.
-        2. בצע חיפוש ברשת למחירים עדכניים ולזמינות הדגמים בישראל.
-        3. דרג לפי חיסכון, אמינות, עלויות תחזוקה.
+        דרישות לפלט:
+        1. החזר מערך JSON בלבד (ללא טקסט חיצוני).
+        2. כל רכב חייב לכלול בדיוק את 16 הפרמטרים הבאים + שדה הסבר נלווה:
+           - brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
+           - reliability_score (1–10) + reliability_method
+           - maintenance_cost (₪ לשנה) + maintenance_method
+           - safety_rating (1–10) + safety_method
+           - insurance_cost (₪ לשנה) + insurance_method
+           - resale_value (1–10) + resale_method
+           - performance_score (1–10) + performance_method
+           - comfort_features (1–10) + comfort_method
+           - suitability (1–10) + suitability_method
+        3. כל שדה *_method יסביר בקצרה איך חושב הערך.
         4. החזר 5–10 רכבים בלבד.
-        5. חובה להחזיר בכל רכב שדות:
-           - brand (באנגלית בלבד)
-           - model (באנגלית בלבד)
-           - year (מספר)
-           - fuel (gasoline/diesel/hybrid/hybrid-diesel/electric)
-           - gear (automatic/manual)
-           - price_range_nis (מערך עם שני מספרים)
-        6. החזר אך ורק בפורמט JSON תקין, בלי טקסט נוסף.
+        5. חובה להחזיר רכבים שנמכרים בפועל בישראל (שוק הרכב הישראלי בלבד).
+        6. אל תחזיר רכבים שלא זמינים בארץ.
+        7. חובה לעמוד בטווח התקציב והשנתון שהמשתמש הזין.
         """
 
         with st.spinner("פונה לגימניי..."):
@@ -211,7 +137,7 @@ else:
 
                 try:
                     cars_from_gemini = json.loads(text)
-                    st.subheader("📋 פלט ראשוני מגימניי (לפני סינון)")
+                    st.subheader("📋 פלט ראשוני מגימניי")
                     st.dataframe(pd.DataFrame(cars_from_gemini))
                 except json.JSONDecodeError:
                     st.error("⚠️ גימניי לא החזיר JSON טהור. להלן הפלט:")
@@ -222,14 +148,23 @@ else:
                 st.error(f"שגיאה בקריאת הפלט מגימניי: {e}")
                 cars_from_gemini = []
 
-        if st.session_state.inventory_df is not None and cars_from_gemini:
-            df_inv = st.session_state.inventory_df
+        # ✅ ניקוי וסינון לפי תקציב
+        if cars_from_gemini:
             min_budget, max_budget = profile["budget_nis"]
-
-            results_df = clean_gemini_output(cars_from_gemini, df_inv, min_budget, max_budget)
+            results_df, methods_info = clean_gemini_output(cars_from_gemini, min_budget, max_budget)
 
             if not results_df.empty:
-                st.success(f"✅ נמצאו {len(results_df)} רכבים אחרי סינון וניקוי.")
-                st.dataframe(results_df.sort_values(by=["brand_sim","model_sim"], ascending=False).reset_index(drop=True))
+                st.session_state.validated_cars = results_df
+                st.session_state.methods_info = methods_info
+
+                st.success(f"✅ נמצאו {len(results_df)} רכבים אחרי סינון לפי תקציב (שוק ישראלי בלבד).")
+                st.dataframe(results_df.reset_index(drop=True))
+
+                # הצגת ההסברים
+                st.markdown("### 📖 הסברים לכל פרמטר")
+                for i, method in enumerate(methods_info, 1):
+                    st.markdown(f"**רכב {i}:**")
+                    for k, v in method.items():
+                        st.write(f"- {k}: {v}")
             else:
-                st.warning("⚠️ לא נמצאו רכבים שעוברים את הסינון מול המאגר והתקציב.")
+                st.warning("⚠️ לא נמצאו רכבים שעומדים בתקציב.")
