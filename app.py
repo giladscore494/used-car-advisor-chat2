@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה ללא FitScore
+# Car Advisor – גרסה עם דיסקליימר ושדות ביטוח נוספים
 # =========================================
 
 import streamlit as st
@@ -42,7 +42,7 @@ def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
         "excluded_colors": excluded_colors,
     }
 
-# ניקוי פלט Gemini (השארת ציונים בלבד)
+# ניקוי פלט Gemini
 def clean_gemini_output(cars_raw):
     records, methods = [], []
     for car in cars_raw:
@@ -79,9 +79,17 @@ gears = st.multiselect("תיבת הילוכים", ["automatic","manual"], defaul
 turbo_choice = st.selectbox("טורבו?", ["any","yes","no"], index=1)
 
 c4, c5, c6 = st.columns([2,1,1])
-with c4: main_use = st.text_input("שימוש עיקרי", value="נסיעה דינמית בסופשים חשוב רכב ספורטיבי ומאיץ טוב")
+with c4: main_use = st.text_input("שימוש עיקרי", value="נסיעה יומיומית")
 with c5: annual_km = st.number_input("נסועה שנתית (ק״מ)", min_value=0, step=1000, value=15000)
 with c6: driver_age = st.number_input("גיל נהג", min_value=16, max_value=100, value=21)
+
+# שדות ביטוח נוספים
+c6a, c6b = st.columns(2)
+with c6a: license_years = st.number_input("וותק רישיון (שנים)", min_value=0, max_value=50, value=2)
+with c6b: driver_gender = st.selectbox("מין נהג", ["זכר", "נקבה"])
+
+insurance_history = st.text_input("עבר ביטוחי", value="שנתיים ללא תביעות")
+violations = st.selectbox("דוחות/שלילות", ["אין", "שלילה בעבר", "נקודות פעילות"])
 
 # נתונים נוספים
 family_size = st.selectbox("גודל משפחה", ["1-2","3-4","5+"])
@@ -114,6 +122,10 @@ profile = make_user_profile(
     family_size, cargo_need, safety_required, trim_level,
     weights, body_style, driving_style, excluded_colors
 )
+profile["license_years"] = license_years
+profile["driver_gender"] = driver_gender
+profile["insurance_history"] = insurance_history
+profile["violations"] = violations
 
 st.session_state.user_profile = profile
 
@@ -138,15 +150,15 @@ else:
         3. search_queries: מערך עם מחרוזות החיפוש שבוצעו בפועל.
         4. recommended_cars: מערך של 5–10 רכבים. כל רכב חייב לכלול:
            - brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
-           - reliability_score (מספר שלם 1–10 בלבד) + reliability_method
+           - reliability_score (מספר 1–10 בלבד) + reliability_method
            - maintenance_cost (₪ לשנה, מספר בלבד) + maintenance_method
-           - safety_rating (מספר שלם 1–10 בלבד) + safety_method
+           - safety_rating (מספר 1–10 בלבד) + safety_method
            - insurance_cost (₪ לשנה, מספר בלבד) + insurance_method
-           - resale_value (מספר שלם 1–10 בלבד) + resale_method
-           - performance_score (מספר שלם 1–10 בלבד) + performance_method
-           - comfort_features (מספר שלם 1–10 בלבד) + comfort_method
-           - suitability (מספר שלם 1–10 בלבד) + suitability_method
-        5. חובה להחזיר **אך ורק מספרים** עבור כל הציונים (בלי טקסטים כמו "בינוני" או "גבוה").
+           - resale_value (מספר 1–10 בלבד) + resale_method
+           - performance_score (מספר 1–10 בלבד) + performance_method
+           - comfort_features (מספר 1–10 בלבד) + comfort_method
+           - suitability (מספר 1–10 בלבד) + suitability_method
+        5. חובה להחזיר אך ורק מספרים עבור כל פרמטר ציון.
         6. חובה להחזיר רכבים שנמכרים בפועל בישראל בלבד.
         """
 
@@ -187,6 +199,16 @@ else:
 
                 st.success(f"✅ התקבלו {len(results_df)} רכבים מגימניי.")
                 st.dataframe(results_df.reset_index(drop=True))
+
+                # דיסקליימר
+                st.markdown(
+                    """
+                    ⚠️ **הבהרה חשובה**:  
+                    הנתונים המוצגים הם הערכה גסה שנבנתה על ידי AI.  
+                    אין לראות בהם תחליף לבדיקה עצמית מול מחירונים רשמיים, מוסכים וחברות ביטוח.  
+                    """,
+                    unsafe_allow_html=True
+                )
 
                 st.markdown("### 📖 הסברים לכל פרמטר")
                 for i, method in enumerate(methods_info, 1):
