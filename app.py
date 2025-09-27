@@ -1,13 +1,12 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה עם טעינה אוטומטית + Fuzzy Matching
+# Car Advisor – גרסה עם טעינה אוטומטית + Fuzzy Matching מותאם למבנה הקובץ שלך
 # =========================================
 
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import json, io, os
+import json, os
 from datetime import datetime
 import google.generativeai as genai
 from rapidfuzz import fuzz
@@ -16,14 +15,14 @@ st.set_page_config(page_title="Car Advisor", page_icon="🚗", layout="wide")
 
 # -------- Helpers --------
 def init_state():
-    for key in ["inventory_df","user_profile","validated_cars","df_ranked"]:
+    for key in ["inventory_df","user_profile","validated_cars"]:
         if key not in st.session_state:
             st.session_state[key] = None
 
 def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
                       turbo_required, main_use, annual_km, driver_age):
     return {
-        "budget_nis": [float(budget_min), float(budget_max)],
+        "budget_nis": [float(budget_min), float(budget_max)],   # נשמר, אבל לא מסונן בפועל (אין מחירים בקובץ)
         "years": [int(years_range[0]), int(years_range[1])],
         "fuel": [f.lower() for f in fuels],
         "gear": [g.lower() for g in gears],
@@ -65,11 +64,16 @@ st.markdown("### שלב 1ב: טעינת מאגר (אוטומטי)")
 default_path = "car_models_israel_clean.csv"
 if os.path.exists(default_path):
     df = pd.read_csv(default_path, encoding="utf-8-sig")
-    fuel_map = {"בנזין":"gasoline","דיזל":"diesel","היברידי":"hybrid","חשמלי":"electric"}
+
+    # מיפוי דלקים לעקביות באנגלית
+    fuel_map = {"בנזין":"gasoline","דיזל":"diesel","היברידי-בנזין":"hybrid","חשמלי":"electric"}
     if df["fuel"].dtype == "object":
         df["fuel"] = df["fuel"].map(fuel_map).fillna(df["fuel"])
+
+    # המרה לערך קריא של הילוכים
     if df["automatic"].dtype in ["int64","float64"]:
         df["automatic"] = df["automatic"].apply(lambda x: "automatic" if x==1 else "manual")
+
     st.session_state.inventory_df = df
     st.success(f"מאגר ברירת מחדל נטען ({len(df)} שורות, {df['brand'].nunique()} מותגים).")
 else:
@@ -93,10 +97,9 @@ else:
         שלבים:
         1. חשוב לפי הנתונים בשאלון.
         2. בצע חיפוש ברשת למחירים עדכניים ולזמינות הדגמים בישראל.
-        3. סנן רק רכבים בתקציב.
-        4. דרג לפי חיסכון, אמינות, עלויות תחזוקה.
-        5. החזר 5–10 רכבים בלבד.
-        6. החזר אך ורק בפורמט JSON תקין, בלי טקסט נוסף.
+        3. דרג לפי חיסכון, אמינות, עלויות תחזוקה.
+        4. החזר 5–10 רכבים בלבד.
+        5. החזר אך ורק בפורמט JSON תקין, בלי טקסט נוסף.
         """
 
         with st.spinner("פונה לגימניי..."):
@@ -104,7 +107,6 @@ else:
                 resp = model.generate_content(prompt)
                 text = resp.candidates[0].content.parts[0].text.strip()
 
-                # ניקוי תגיות ```json
                 if text.startswith("```"):
                     text = text.strip("`")
                     text = text.replace("json\n", "").replace("json", "").strip()
@@ -125,21 +127,18 @@ else:
         valid_cars = []
         if st.session_state.inventory_df is not None and cars_from_gemini:
             df_inv = st.session_state.inventory_df
-            min_budget, max_budget = profile["budget_nis"]
-            min_budget, max_budget = min_budget*0.91, max_budget*1.09
 
             for car in cars_from_gemini:
                 found_match = False
                 for _, row in df_inv.iterrows():
-                    brand_sim = fuzz.ratio(str(car["brand"]).lower(), str(row["brand"]).lower())
-                    model_sim = fuzz.partial_ratio(str(car["model"]).lower(), str(row["model"]).lower())
-                    year_match = (row["year"] == car["year"])
+                    brand_sim = fuzz.ratio(str(car.get("brand","")).lower(), str(row["brand"]).lower())
+                    model_sim = fuzz.partial_ratio(str(car.get("model","")).lower(), str(row["model"]).lower())
+                    year_match = ("year" in car and row["year"] == car["year"])
                     if brand_sim >= 85 and model_sim >= 80 and year_match:
                         found_match = True
                         break
 
-                price_ok = min_budget <= car["price_range_nis"][0] and max_budget >= car["price_range_nis"][1]
-                if found_match and price_ok:
+                if found_match:
                     valid_cars.append(car)
 
             st.session_state.validated_cars = pd.DataFrame(valid_cars)
@@ -147,4 +146,4 @@ else:
                 st.success(f"✅ נמצאו {len(st.session_state.validated_cars)} רכבים אחרי סינון.")
                 st.dataframe(st.session_state.validated_cars)
             else:
-                st.warning("⚠️ לא נמצאו רכבים שעוברים גם את הסינון מול המאגר וגם את התקציב.")
+                st.warning("⚠️ לא נמצאו רכבים שעוברים את הסינון מול המאגר.")
