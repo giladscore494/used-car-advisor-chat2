@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה עם בדיקת מודלים זמינים
+# Car Advisor – גרסה מאוחדת עם Gemini 2.5 Pro
 # =========================================
 
 import streamlit as st
@@ -80,19 +80,7 @@ if not api_key:
     st.warning("לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה.")
 else:
     genai.configure(api_key=api_key)
-
-    # כפתור להצגת רשימת מודלים זמינים
-    if st.button("📋 הצג מודלים זמינים מגימניי"):
-        try:
-            models = genai.list_models()
-            st.write("מודלים זמינים אצלך:")
-            for m in models:
-                st.write(m.name)
-        except Exception as e:
-            st.error(f"שגיאה בקבלת רשימת מודלים: {e}")
-
-    # כאן תצטרך לשים את השם שהתקבל מ-list_models()
-    model_name = "models/gemini-1.5-flash"  # שנה לשם התקף אצלך
+    model_name = "models/gemini-2.5-pro"  # ← כאן המודל המעודכן
     model = genai.GenerativeModel(model_name)
 
     if st.button("🚀 בקש המלצות מגימניי"):
@@ -144,7 +132,7 @@ def calculate_fit_score(row, profile):
     car_mid = (row["price_range_nis"][0] + row["price_range_nis"][1]) / 2
     price_diff = abs(car_mid - budget_mid) / (budget_mid if budget_mid>0 else 1)
     price_score = max(0, 30 - price_diff*30)
-    if car_mid <= budget_mid: price_score += 5  # עדיפות למחיר נמוך
+    if car_mid <= budget_mid: price_score += 5
     score += price_score
 
     year_min, year_max = profile["years"]
