@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה עם דיסקליימר ושדות ביטוח נוספים
+# Car Advisor – גרסה מלאה עם צריכת דלק (ק"מ/ל'), אגרה שנתית, ועלות דלק שנתית
 # =========================================
 
 import streamlit as st
@@ -12,13 +12,15 @@ import google.generativeai as genai
 
 st.set_page_config(page_title="Car Advisor", page_icon="🚗", layout="wide")
 
+# -------- קבועים --------
+FUEL_PRICE_NIS = 7.0  # מחיר ליטר דלק ממוצע (₪)
+
 # -------- Helpers --------
 def init_state():
     for key in ["user_profile","validated_cars","methods_info"]:
         if key not in st.session_state:
             st.session_state[key] = None
 
-# פרופיל משתמש בסיסי
 def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
                       turbo_required, main_use, annual_km, driver_age,
                       family_size, cargo_need, safety_required,
@@ -42,26 +44,72 @@ def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
         "excluded_colors": excluded_colors,
     }
 
-# ניקוי פלט Gemini
 def clean_gemini_output(cars_raw):
     records, methods = [], []
     for car in cars_raw:
         if not isinstance(car, dict):
             continue
-
         record, method = {}, {}
         for k, v in car.items():
             if k.endswith("_method"):
                 method[k] = v
             else:
                 record[k] = v
-
         records.append(record)
         methods.append(method)
-
     return pd.DataFrame(records), methods
 
-# -------- שלב 1: שאלון --------
+# -------- מיפויים --------
+fuel_map = {
+    "בנזין": "gasoline",
+    "היברידי": "hybrid",
+    "דיזל היברידי": "hybrid-diesel",
+    "דיזל": "diesel",
+    "חשמלי": "electric"
+}
+gear_map = {"אוטומטית": "automatic", "ידנית": "manual"}
+turbo_map = {"לא משנה": "any", "כן": "yes", "לא": "no"}
+
+fuel_map_he = {v: k for k, v in fuel_map.items()}
+gear_map_he = {v: k for k, v in gear_map.items()}
+turbo_map_he = {"yes": "כן", "no": "לא", "any": "לא משנה", True: "כן", False: "לא"}
+
+column_map_he = {
+    "brand": "מותג",
+    "model": "דגם",
+    "year": "שנה",
+    "fuel": "דלק",
+    "gear": "תיבה",
+    "turbo": "טורבו",
+    "engine_cc": "נפח מנוע (סמ\"ק)",
+    "price_range_nis": "טווח מחיר (₪)",
+    "avg_fuel_consumption": "צריכת דלק ממוצעת (ק\"מ/ל')",
+    "annual_fee": "אגרה שנתית (₪)",
+    "annual_fuel_cost": "עלות דלק שנתית (₪)",
+    "reliability_score": "אמינות",
+    "maintenance_cost": "עלות אחזקה (₪/שנה)",
+    "safety_rating": "בטיחות",
+    "insurance_cost": "עלות ביטוח (₪/שנה)",
+    "resale_value": "שמירת ערך",
+    "performance_score": "ביצועים",
+    "comfort_features": "נוחות",
+    "suitability": "התאמה"
+}
+
+method_map_he = {
+    "fuel_method": "שיטת חישוב צריכת דלק",
+    "fee_method": "שיטת חישוב אגרה",
+    "reliability_method": "שיטת חישוב אמינות",
+    "maintenance_method": "שיטת חישוב עלות אחזקה",
+    "safety_method": "שיטת חישוב בטיחות",
+    "insurance_method": "שיטת חישוב ביטוח",
+    "resale_method": "שיטת חישוב שמירת ערך",
+    "performance_method": "שיטת חישוב ביצועים",
+    "comfort_method": "שיטת חישוב נוחות",
+    "suitability_method": "שיטת חישוב התאמה"
+}
+
+# -------- שלב 1 --------
 init_state()
 st.title("🚗 Car Advisor – ייעוץ רכב")
 
@@ -74,16 +122,19 @@ with col3:
     with ymin: year_min = st.number_input("שנתון מינימום", min_value=1990, max_value=datetime.now().year, value=2015)
     with ymax: year_max = st.number_input("שנתון מקסימום", min_value=1990, max_value=datetime.now().year, value=2019)
 
-fuels = st.multiselect("סוגי דלק מועדפים", ["gasoline","hybrid","hybrid-diesel","diesel","electric"], default=["gasoline"])
-gears = st.multiselect("תיבת הילוכים", ["automatic","manual"], default=["automatic"])
-turbo_choice = st.selectbox("טורבו?", ["any","yes","no"], index=1)
+fuels_he = st.multiselect("סוגי דלק מועדפים", list(fuel_map.keys()), default=["בנזין"])
+gears_he = st.multiselect("תיבת הילוכים", list(gear_map.keys()), default=["אוטומטית"])
+turbo_choice_he = st.selectbox("טורבו?", list(turbo_map.keys()), index=1)
+
+fuels = [fuel_map[f] for f in fuels_he]
+gears = [gear_map[g] for g in gears_he]
+turbo_choice = turbo_map[turbo_choice_he]
 
 c4, c5, c6 = st.columns([2,1,1])
 with c4: main_use = st.text_input("שימוש עיקרי", value="נסיעה יומיומית")
 with c5: annual_km = st.number_input("נסועה שנתית (ק״מ)", min_value=0, step=1000, value=15000)
 with c6: driver_age = st.number_input("גיל נהג", min_value=16, max_value=100, value=21)
 
-# שדות ביטוח נוספים
 c6a, c6b = st.columns(2)
 with c6a: license_years = st.number_input("וותק רישיון (שנים)", min_value=0, max_value=50, value=2)
 with c6b: driver_gender = st.selectbox("מין נהג", ["זכר", "נקבה"])
@@ -91,7 +142,6 @@ with c6b: driver_gender = st.selectbox("מין נהג", ["זכר", "נקבה"])
 insurance_history = st.text_input("עבר ביטוחי", value="שנתיים ללא תביעות")
 violations = st.selectbox("דוחות/שלילות", ["אין", "שלילה בעבר", "נקודות פעילות"])
 
-# נתונים נוספים
 family_size = st.selectbox("גודל משפחה", ["1-2","3-4","5+"])
 cargo_need = st.selectbox("צורך בתא מטען", ["קטן","בינוני","גדול"])
 safety_required = st.radio("חובה מערכות בטיחות אקטיביות?", ["כן","לא"])
@@ -129,7 +179,7 @@ profile["violations"] = violations
 
 st.session_state.user_profile = profile
 
-# -------- שלב 2: Gemini --------
+# -------- שלב 2 --------
 st.markdown("### שלב 2: Gemini – המלצות ראשוניות")
 api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
 if not api_key:
@@ -145,77 +195,66 @@ else:
         {json.dumps(profile, ensure_ascii=False, indent=2)}
 
         דרישות לפלט:
-        1. החזר JSON יחיד עם שלושה שדות: "search_performed", "search_queries", "recommended_cars".
-        2. search_performed: True אם בוצע חיפוש אינטרנטי, אחרת False.
-        3. search_queries: מערך עם מחרוזות החיפוש שבוצעו בפועל.
-        4. recommended_cars: מערך של 5–10 רכבים. כל רכב חייב לכלול:
-           - brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
-           - reliability_score (מספר 1–10 בלבד) + reliability_method
-           - maintenance_cost (₪ לשנה, מספר בלבד) + maintenance_method
-           - safety_rating (מספר 1–10 בלבד) + safety_method
-           - insurance_cost (₪ לשנה, מספר בלבד) + insurance_method
-           - resale_value (מספר 1–10 בלבד) + resale_method
-           - performance_score (מספר 1–10 בלבד) + performance_method
-           - comfort_features (מספר 1–10 בלבד) + comfort_method
-           - suitability (מספר 1–10 בלבד) + suitability_method
-        5. חובה להחזיר אך ורק מספרים עבור כל פרמטר ציון.
-        6. חובה להחזיר רכבים שנמכרים בפועל בישראל בלבד.
+        - החזר JSON עם שלושה שדות: "search_performed", "search_queries", "recommended_cars".
+        - כל רכב חייב לכלול:
+          brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
+          avg_fuel_consumption (ק\"מ/ל', מספר בלבד) + fuel_method
+          annual_fee (₪ לשנה, מספר בלבד) + fee_method
+          reliability_score (1–10) + reliability_method
+          maintenance_cost (₪/שנה) + maintenance_method
+          safety_rating (1–10) + safety_method
+          insurance_cost (₪/שנה) + insurance_method
+          resale_value (1–10) + resale_method
+          performance_score (1–10) + performance_method
+          comfort_features (1–10) + comfort_method
+          suitability (1–10) + suitability_method
         """
 
         with st.spinner("פונה לגימניי..."):
             try:
                 resp = model.generate_content(prompt)
                 text = resp.candidates[0].content.parts[0].text.strip()
-
                 if text.startswith("```"):
-                    text = text.strip("`")
-                    text = text.replace("json\n", "").replace("json", "").strip()
-
+                    text = text.strip("`").replace("json\n", "").replace("json", "").strip()
                 try:
                     parsed = json.loads(text)
                 except json.JSONDecodeError:
-                    st.error("⚠️ גימניי לא החזיר JSON תקין. להלן הפלט:")
+                    st.error("⚠️ גימניי לא החזיר JSON תקין.")
                     st.code(text)
                     parsed = {}
-
             except Exception as e:
                 st.error(f"שגיאה בקריאת הפלט מגימניי: {e}")
                 parsed = {}
 
         if parsed and "recommended_cars" in parsed:
-            search_performed = parsed.get("search_performed", False)
-            search_queries = parsed.get("search_queries", [])
-            if search_performed and search_queries:
-                st.info("✅ בוצע חיפוש אינטרנטי לנתוני שוק עדכניים.")
-            else:
-                st.warning("⚠️ לא ברור אם בוצע חיפוש חי. ייתכן שהנתונים חלקיים.")
-
             cars_to_process = parsed["recommended_cars"]
             results_df, methods_info = clean_gemini_output(cars_to_process)
 
             if not results_df.empty:
-                st.session_state.validated_cars = results_df
-                st.session_state.methods_info = methods_info
+                # --- חישוב עלות דלק שנתית ---
+                results_df["annual_fuel_cost"] = (
+                    profile["annual_km"] / results_df["avg_fuel_consumption"].replace(0, 1)
+                ) * FUEL_PRICE_NIS
+
+                # --- טבלה בעברית ---
+                results_df_display = results_df.copy()
+                results_df_display["fuel"] = results_df_display["fuel"].map(fuel_map_he).fillna(results_df_display["fuel"])
+                results_df_display["gear"] = results_df_display["gear"].map(gear_map_he).fillna(results_df_display["gear"])
+                results_df_display["turbo"] = results_df_display["turbo"].map(turbo_map_he).fillna(results_df_display["turbo"])
+                results_df_display = results_df_display.rename(columns=column_map_he)
 
                 st.success(f"✅ התקבלו {len(results_df)} רכבים מגימניי.")
-                st.dataframe(results_df.reset_index(drop=True))
+                st.dataframe(results_df_display.reset_index(drop=True))
 
                 # דיסקליימר
-                st.markdown(
-                    """
-                    ⚠️ **הבהרה חשובה**:  
-                    הנתונים המוצגים הם הערכה גסה שנבנתה על ידי AI.  
-                    אין לראות בהם תחליף לבדיקה עצמית מול מחירונים רשמיים, מוסכים וחברות ביטוח.  
-                    """,
-                    unsafe_allow_html=True
-                )
+                st.markdown("⚠️ **הבהרה חשובה**: הנתונים הם הערכה גסה של AI בלבד.", unsafe_allow_html=True)
 
+                # --- הסברים בעברית ---
                 st.markdown("### 📖 הסברים לכל פרמטר")
                 for i, method in enumerate(methods_info, 1):
                     with st.expander(f"🔎 רכב {i} – הסברים"):
                         for k, v in method.items():
-                            st.write(f"- **{k}:** {v}")
+                            field_he = method_map_he.get(k, k)
+                            st.write(f"- **{field_he}:** {v}")
             else:
                 st.error("⚠️ לא נמצאו רכבים בפלט.")
-        else:
-            st.error("⚠️ הפלט מגימניי לא כלל שדה 'recommended_cars'.")
