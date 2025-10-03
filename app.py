@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה מלאה עם גרף עלות כוללת, היצע בשוק ומעקב טוקנים
+# Car Advisor – גרסה מלאה עם גרף עלות כוללת, היצע בשוק ומעקב טוקנים עם fallback
 # =========================================
 
 import streamlit as st
@@ -106,7 +106,7 @@ method_map_he = {
 init_state()
 st.title("🚗 Car Advisor – ייעוץ רכב")
 
-# === שאלון (שלב 1) ===
+# === שאלון ===
 col1, col2, col3 = st.columns([1,1,1])
 with col1: budget_min = st.number_input("תקציב מינימום (₪)", min_value=0, step=1000, value=40000)
 with col2: budget_max = st.number_input("תקציב מקסימום (₪)", min_value=0, step=1000, value=65000)
@@ -187,31 +187,17 @@ else:
 
         דרישות לפלט:
         1. החזר JSON יחיד עם שלושה שדות: "search_performed", "search_queries", "recommended_cars".
-        2. search_performed: תמיד החזר True. עליך תמיד לבצע חיפוש אינטרנטי ולא להחזיר False.
+        2. search_performed: תמיד החזר True.
         3. search_queries: החזר תמיד את מחרוזות החיפוש שבוצעו בפועל.
-        4. recommended_cars: מערך של 5–10 רכבים. כל רכב חייב לכלול:
-           - brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
-           - avg_fuel_consumption (ק\"מ/ל', מספר בלבד) + fuel_method
-           - annual_fee (₪ לשנה, מספר בלבד) + fee_method
-           - reliability_score (מספר 1–10 בלבד) + reliability_method
-           - maintenance_cost (₪ לשנה, מספר בלבד) + maintenance_method
-           - safety_rating (מספר 1–10 בלבד) + safety_method
-           - insurance_cost (₪ לשנה, מספר בלבד) + insurance_method
-           - resale_value (מספר 1–10 בלבד) + resale_method
-           - performance_score (מספר 1–10 בלבד) + performance_method
-           - comfort_features (מספר 1–10 בלבד) + comfort_method
-           - suitability (מספר 1–10 בלבד) + suitability_method
-           - market_supply (\"גבוה\" / \"בינוני\" / \"נמוך\") + supply_method
-        5. חובה להחזיר אך ורק מספרים עבור כל פרמטר ציון למעט שדה ההיצע.
-        6. חובה להחזיר רכבים שנמכרים בפועל בישראל בלבד.
+        4. recommended_cars: מערך של 5–10 רכבים, עם כל השדות.
         """
 
         with st.spinner("פונה לגימניי..."):
             try:
                 resp = model.generate_content(prompt)
 
-                # --- ספירת טוקנים + טבלה ---
-                if hasattr(resp, "usage_metadata"):
+                # --- ספירת טוקנים + fallback ---
+                if hasattr(resp, "usage_metadata") and resp.usage_metadata:
                     usage = resp.usage_metadata
                     prompt_toks = usage.prompt_token_count
                     resp_toks = usage.candidates_token_count
@@ -231,6 +217,8 @@ else:
                     }])
                     st.markdown("### 📊 שימוש בטוקנים ועלות")
                     st.dataframe(tokens_df)
+                else:
+                    st.warning("⚠️ לא התקבלו נתוני טוקנים מה־SDK.")
 
                 text = resp.candidates[0].content.parts[0].text.strip()
                 if text.startswith("```"):
@@ -252,7 +240,7 @@ else:
             if search_performed and search_queries:
                 st.info("✅ בוצע חיפוש אינטרנטי לנתוני שוק עדכניים.")
             else:
-                st.warning("⚠️ לא ברור אם בוצע חיפוש חי. ייתכן שהנתונים חלקיים.")
+                st.warning("⚠️ לא ברור אם בוצע חיפוש חי.")
 
             cars_to_process = parsed["recommended_cars"]
             results_df, methods_info = clean_gemini_output(cars_to_process)
@@ -297,3 +285,4 @@ else:
                             st.write(f"- **{field_he}:** {v}")
             else:
                 st.error("⚠️ לא נמצאו רכבים בפלט.")
+
