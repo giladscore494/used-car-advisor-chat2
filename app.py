@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה עם גרף עלות כוללת + היצע שוק
+# Car Advisor – גרסה מלאה עם גרף עלות כוללת והיצע בשוק
 # =========================================
 
 import streamlit as st
@@ -141,7 +141,75 @@ method_map_he = {
 init_state()
 st.title("🚗 Car Advisor – ייעוץ רכב")
 
-# (קיצור: שלב השאלון נשאר זהה...)
+st.markdown("### שלב 1: שאלון")
+col1, col2, col3 = st.columns([1,1,1])
+with col1: budget_min = st.number_input("תקציב מינימום (₪)", min_value=0, step=1000, value=40000)
+with col2: budget_max = st.number_input("תקציב מקסימום (₪)", min_value=0, step=1000, value=65000)
+with col3:
+    ymin, ymax = st.columns(2)
+    with ymin: year_min = st.number_input("שנתון מינימום", min_value=1990, max_value=datetime.now().year, value=2015)
+    with ymax: year_max = st.number_input("שנתון מקסימום", min_value=1990, max_value=datetime.now().year, value=2019)
+
+fuels_he = st.multiselect("סוגי דלק מועדפים", list(fuel_map.keys()), default=["בנזין"])
+gears_he = st.multiselect("תיבת הילוכים", list(gear_map.keys()), default=["אוטומטית"])
+turbo_choice_he = st.selectbox("טורבו?", list(turbo_map.keys()), index=1)
+
+fuels = [fuel_map[f] for f in fuels_he]
+gears = [gear_map[g] for g in gears_he]
+turbo_choice = turbo_map[turbo_choice_he]
+
+c4, c5, c6 = st.columns([2,1,1])
+with c4: main_use = st.text_input("שימוש עיקרי", value="נסיעה יומיומית")
+with c5: annual_km = st.number_input("נסועה שנתית (ק״מ)", min_value=0, step=1000, value=15000)
+with c6: driver_age = st.number_input("גיל נהג", min_value=16, max_value=100, value=21)
+
+c6a, c6b = st.columns(2)
+with c6a: license_years = st.number_input("וותק רישיון (שנים)", min_value=0, max_value=50, value=2)
+with c6b: driver_gender = st.selectbox("מין נהג", ["זכר", "נקבה"])
+
+insurance_history = st.text_input("עבר ביטוחי", value="שנתיים ללא תביעות")
+violations = st.selectbox("דוחות/שלילות", ["אין", "שלילה בעבר", "נקודות פעילות"])
+
+family_size = st.selectbox("גודל משפחה", ["1-2","3-4","5+"])
+cargo_need = st.selectbox("צורך בתא מטען", ["קטן","בינוני","גדול"])
+safety_required = st.radio("חובה מערכות בטיחות אקטיביות?", ["כן","לא"])
+trim_level = st.selectbox("רמת אבזור", ["בסיסי","סטנדרטי","עשיר"])
+
+st.markdown("#### סדר עדיפויות (1-5)")
+reliability_weight = st.slider("אמינות", 1, 5, 5)
+resale_weight = st.slider("שמירת ערך", 1, 5, 3)
+fuel_weight = st.slider("חיסכון בדלק", 1, 5, 4)
+performance_weight = st.slider("ביצועים", 1, 5, 2)
+comfort_weight = st.slider("נוחות", 1, 5, 3)
+
+body_style = st.selectbox("סגנון מרכב מועדף", ["כללי","סדאן","האצ'בק","קרוסאובר/ג'יפון"])
+driving_style = st.selectbox("סגנון נהיגה", ["רגוע ונינוח","דינמי וספורטיבי"])
+excluded_colors = st.text_input("צבעים לפסילה (מופרדים בפסיק)", value="").split(",")
+
+weights = {
+    "reliability": reliability_weight,
+    "resale": resale_weight,
+    "fuel": fuel_weight,
+    "performance": performance_weight,
+    "comfort": comfort_weight,
+}
+
+profile = make_user_profile(
+    budget_min, budget_max, [year_min, year_max],
+    fuels, gears, turbo_choice, main_use, annual_km, driver_age,
+    family_size, cargo_need, safety_required, trim_level,
+    weights, body_style, driving_style, excluded_colors
+)
+profile["license_years"] = license_years
+profile["driver_gender"] = driver_gender
+profile["insurance_history"] = insurance_history
+profile["violations"] = violations
+
+fuel_price = st.number_input("מחיר ליטר דלק (₪)", min_value=1.0, max_value=20.0, value=7.0, step=0.1)
+st.session_state.fuel_price = fuel_price
+profile["fuel_price"] = fuel_price
+
+st.session_state.user_profile = profile
 
 # -------- שלב 2 --------
 st.markdown("### שלב 2: Gemini – המלצות ראשוניות")
@@ -156,11 +224,11 @@ else:
     if st.button("🚀 בקש המלצות מגימניי"):
         prompt = f"""
         אני צריך המלצות לרכבים ללקוח ישראלי. זה הפרופיל:
-        {json.dumps(st.session_state.user_profile, ensure_ascii=False, indent=2)}
+        {json.dumps(profile, ensure_ascii=False, indent=2)}
 
         דרישות לפלט:
         1. החזר JSON יחיד עם שלושה שדות: "search_performed", "search_queries", "recommended_cars".
-        2. search_performed: תמיד החזר True (סימולציה בלבד).
+        2. search_performed: תמיד החזר True. עליך תמיד לבצע חיפוש אינטרנטי ולא להחזיר False.
         3. search_queries: החזר תמיד את מחרוזות החיפוש שבוצעו בפועל.
         4. recommended_cars: מערך של 5–10 רכבים. כל רכב חייב לכלול:
            - brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
@@ -174,8 +242,8 @@ else:
            - performance_score (מספר 1–10 בלבד) + performance_method
            - comfort_features (מספר 1–10 בלבד) + comfort_method
            - suitability (מספר 1–10 בלבד) + suitability_method
-           - market_supply ("גבוה" / "בינוני" / "נמוך") + supply_method
-        5. חובה להחזיר אך ורק מספרים עבור כל פרמטר ציון (למעט market_supply שהוא טקסט).
+           - market_supply (\"גבוה\" / \"בינוני\" / \"נמוך\") + supply_method
+        5. חובה להחזיר אך ורק מספרים עבור כל פרמטר ציון למעט שדה ההיצע.
         6. חובה להחזיר רכבים שנמכרים בפועל בישראל בלבד.
         """
 
@@ -185,22 +253,37 @@ else:
                 text = resp.candidates[0].content.parts[0].text.strip()
                 if text.startswith("```"):
                     text = text.strip("`").replace("json\n", "").replace("json", "").strip()
-                parsed = json.loads(text)
+                try:
+                    parsed = json.loads(text)
+                except json.JSONDecodeError:
+                    st.error("⚠️ גימניי לא החזיר JSON תקין.")
+                    st.code(text)
+                    parsed = {}
             except Exception as e:
                 st.error(f"שגיאה בקריאת הפלט מגימניי: {e}")
                 parsed = {}
 
         if parsed and "recommended_cars" in parsed:
+            search_performed = parsed.get("search_performed", False)
+            search_queries = parsed.get("search_queries", [])
+
+            if search_performed and search_queries:
+                st.info("✅ בוצע חיפוש אינטרנטי לנתוני שוק עדכניים.")
+            else:
+                st.warning("⚠️ לא ברור אם בוצע חיפוש חי. ייתכן שהנתונים חלקיים.")
+
             cars_to_process = parsed["recommended_cars"]
             results_df, methods_info = clean_gemini_output(cars_to_process)
 
             if not results_df.empty:
+                # --- Normalize Gemini values ---
                 results_df = normalize_car_values(results_df)
 
-                # חישוב עלויות
+                # --- חישוב עלויות ---
                 results_df["annual_fuel_cost"] = (
-                    st.session_state.user_profile["annual_km"] / results_df["avg_fuel_consumption"].replace(0, 1)
+                    profile["annual_km"] / results_df["avg_fuel_consumption"].replace(0, 1)
                 ) * st.session_state.fuel_price
+
                 results_df["total_annual_cost"] = (
                     results_df["annual_fuel_cost"] +
                     results_df["maintenance_cost"] +
@@ -208,7 +291,7 @@ else:
                     results_df["annual_fee"]
                 )
 
-                # טבלה בעברית
+                # --- טבלה בעברית ---
                 results_df_display = results_df.copy()
                 results_df_display["fuel"] = results_df_display["fuel"].map(fuel_map_he).fillna(results_df_display["fuel"])
                 results_df_display["gear"] = results_df_display["gear"].map(gear_map_he).fillna(results_df_display["gear"])
@@ -218,14 +301,17 @@ else:
                 st.success(f"✅ התקבלו {len(results_df)} רכבים מגימניי.")
                 st.dataframe(results_df_display.reset_index(drop=True))
 
-                # גרף
+                # דיסקליימר
+                st.markdown("⚠️ **הבהרה חשובה**: הנתונים הם הערכה גסה של AI בלבד.", unsafe_allow_html=True)
+
+                # --- גרף השוואה ---
                 st.markdown("### 📊 השוואת עלות כוללת שנתית")
-                chart_df = results_df_display[["מותג","דגם","שנה","עלות כוללת שנתית (₪)"]].copy()
+                chart_df = results_df_display[["מותג", "דגם", "שנה", "עלות כוללת שנתית (₪)"]].copy()
                 chart_df["רכב"] = chart_df["מותג"] + " " + chart_df["דגם"] + " " + chart_df["שנה"].astype(str)
                 chart_df = chart_df.set_index("רכב")
                 st.bar_chart(chart_df["עלות כוללת שנתית (₪)"])
 
-                # הסברים
+                # --- הסברים בעברית ---
                 st.markdown("### 📖 הסברים לכל פרמטר")
                 for i, method in enumerate(methods_info, 1):
                     car_name = f"{results_df.iloc[i-1]['brand']} {results_df.iloc[i-1]['model']} {results_df.iloc[i-1]['year']}"
