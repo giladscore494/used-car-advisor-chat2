@@ -216,7 +216,8 @@ if not api_key:
     st.warning("לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה.")
 else:
     genai.configure(api_key=api_key)
-    model_name = "models/gemini-2.5-pro"
+    # שימוש במודל הכי חסכוני
+    model_name = "models/gemini-2.5-flash-lite"
     model = genai.GenerativeModel(model_name)
 
     if st.button("🚀 בקש המלצות מגימניי"):
