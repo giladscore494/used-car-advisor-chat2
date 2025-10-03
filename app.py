@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה מלאה עם גרף עלות כוללת והיצע בשוק
+# Car Advisor – גרסה מלאה עם גרף עלות כוללת, היצע בשוק ומעקב טוקנים
 # =========================================
 
 import streamlit as st
@@ -56,84 +56,49 @@ def clean_gemini_output(cars_raw):
         methods.append(method)
     return pd.DataFrame(records), methods
 
-# -------- Normalize values from Gemini --------
 def normalize_car_values(df):
     if "fuel" in df.columns:
         df["fuel"] = df["fuel"].replace({
-            "בנזין": "gasoline",
-            "דיזל": "diesel",
-            "היברידי": "hybrid",
-            "דיזל היברידי": "hybrid-diesel",
-            "חשמלי": "electric"
+            "בנזין": "gasoline","דיזל": "diesel","היברידי": "hybrid",
+            "דיזל היברידי": "hybrid-diesel","חשמלי": "electric"
         })
     if "gear" in df.columns:
         df["gear"] = df["gear"].replace({
-            "אוטומטי": "automatic",
-            "אוטומטי (DSG7)": "automatic",
-            "אוטומטי (TCT)": "automatic",
-            "אוטומטי (רובוטי)": "automatic",
-            "ידני": "manual",
-            "ידנית": "manual"
+            "אוטומטי": "automatic","אוטומטי (DSG7)": "automatic",
+            "אוטומטי (TCT)": "automatic","אוטומטי (רובוטי)": "automatic",
+            "ידני": "manual","ידנית": "manual"
         })
     if "turbo" in df.columns:
         df["turbo"] = df["turbo"].replace({
-            "כן": True,
-            "לא": False,
-            True: True,
-            False: False
+            "כן": True,"לא": False,True: True,False: False
         })
     return df
 
 # -------- מיפויים --------
-fuel_map = {
-    "בנזין": "gasoline",
-    "היברידי": "hybrid",
-    "דיזל היברידי": "hybrid-diesel",
-    "דיזל": "diesel",
-    "חשמלי": "electric"
-}
-gear_map = {"אוטומטית": "automatic", "ידנית": "manual"}
-turbo_map = {"לא משנה": "any", "כן": "yes", "לא": "no"}
-
+fuel_map = {"בנזין": "gasoline","היברידי": "hybrid","דיזל היברידי": "hybrid-diesel","דיזל": "diesel","חשמלי": "electric"}
+gear_map = {"אוטומטית": "automatic","ידנית": "manual"}
+turbo_map = {"לא משנה": "any","כן": "yes","לא": "no"}
 fuel_map_he = {v: k for k, v in fuel_map.items()}
 gear_map_he = {v: k for k, v in gear_map.items()}
-turbo_map_he = {"yes": "כן", "no": "לא", "any": "לא משנה", True: "כן", False: "לא"}
+turbo_map_he = {"yes": "כן","no": "לא","any": "לא משנה",True: "כן",False: "לא"}
 
 column_map_he = {
-    "brand": "מותג",
-    "model": "דגם",
-    "year": "שנה",
-    "fuel": "דלק",
-    "gear": "תיבה",
-    "turbo": "טורבו",
-    "engine_cc": "נפח מנוע (סמ\"ק)",
-    "price_range_nis": "טווח מחיר (₪)",
-    "avg_fuel_consumption": "צריכת דלק ממוצעת (ק\"מ/ל')",
-    "annual_fee": "אגרה שנתית (₪)",
-    "annual_fuel_cost": "עלות דלק שנתית (₪)",
-    "total_annual_cost": "עלות כוללת שנתית (₪)",
-    "reliability_score": "אמינות",
-    "maintenance_cost": "עלות אחזקה (₪/שנה)",
-    "safety_rating": "בטיחות",
-    "insurance_cost": "עלות ביטוח (₪/שנה)",
-    "resale_value": "שמירת ערך",
-    "performance_score": "ביצועים",
-    "comfort_features": "נוחות",
-    "suitability": "התאמה",
-    "market_supply": "היצע בשוק"
+    "brand": "מותג","model": "דגם","year": "שנה","fuel": "דלק","gear": "תיבה",
+    "turbo": "טורבו","engine_cc": "נפח מנוע (סמ\"ק)","price_range_nis": "טווח מחיר (₪)",
+    "avg_fuel_consumption": "צריכת דלק ממוצעת (ק\"מ/ל')","annual_fee": "אגרה שנתית (₪)",
+    "annual_fuel_cost": "עלות דלק שנתית (₪)","total_annual_cost": "עלות כוללת שנתית (₪)",
+    "reliability_score": "אמינות","maintenance_cost": "עלות אחזקה (₪/שנה)",
+    "safety_rating": "בטיחות","insurance_cost": "עלות ביטוח (₪/שנה)",
+    "resale_value": "שמירת ערך","performance_score": "ביצועים",
+    "comfort_features": "נוחות","suitability": "התאמה","market_supply": "היצע בשוק"
 }
 
 method_map_he = {
-    "fuel_method": "שיטת חישוב צריכת דלק",
-    "fee_method": "שיטת חישוב אגרה",
-    "reliability_method": "שיטת חישוב אמינות",
-    "maintenance_method": "שיטת חישוב עלות אחזקה",
-    "safety_method": "שיטת חישוב בטיחות",
-    "insurance_method": "שיטת חישוב ביטוח",
-    "resale_method": "שיטת חישוב שמירת ערך",
-    "performance_method": "שיטת חישוב ביצועים",
-    "comfort_method": "שיטת חישוב נוחות",
-    "suitability_method": "שיטת חישוב התאמה",
+    "fuel_method": "שיטת חישוב צריכת דלק","fee_method": "שיטת חישוב אגרה",
+    "reliability_method": "שיטת חישוב אמינות","maintenance_method": "שיטת חישוב עלות אחזקה",
+    "safety_method": "שיטת חישוב בטיחות","insurance_method": "שיטת חישוב ביטוח",
+    "resale_method": "שיטת חישוב שמירת ערך","performance_method": "שיטת חישוב ביצועים",
+    "comfort_method": "שיטת חישוב נוחות","suitability_method": "שיטת חישוב התאמה",
     "supply_method": "שיטת קביעת היצע"
 }
 
@@ -141,7 +106,7 @@ method_map_he = {
 init_state()
 st.title("🚗 Car Advisor – ייעוץ רכב")
 
-st.markdown("### שלב 1: שאלון")
+# === שאלון (שלב 1) ===
 col1, col2, col3 = st.columns([1,1,1])
 with col1: budget_min = st.number_input("תקציב מינימום (₪)", min_value=0, step=1000, value=40000)
 with col2: budget_max = st.number_input("תקציב מקסימום (₪)", min_value=0, step=1000, value=65000)
@@ -186,13 +151,7 @@ body_style = st.selectbox("סגנון מרכב מועדף", ["כללי","סדא�
 driving_style = st.selectbox("סגנון נהיגה", ["רגוע ונינוח","דינמי וספורטיבי"])
 excluded_colors = st.text_input("צבעים לפסילה (מופרדים בפסיק)", value="").split(",")
 
-weights = {
-    "reliability": reliability_weight,
-    "resale": resale_weight,
-    "fuel": fuel_weight,
-    "performance": performance_weight,
-    "comfort": comfort_weight,
-}
+weights = {"reliability": reliability_weight,"resale": resale_weight,"fuel": fuel_weight,"performance": performance_weight,"comfort": comfort_weight}
 
 profile = make_user_profile(
     budget_min, budget_max, [year_min, year_max],
@@ -250,6 +209,29 @@ else:
         with st.spinner("פונה לגימניי..."):
             try:
                 resp = model.generate_content(prompt)
+
+                # --- ספירת טוקנים + טבלה ---
+                if hasattr(resp, "usage_metadata"):
+                    usage = resp.usage_metadata
+                    prompt_toks = usage.prompt_token_count
+                    resp_toks = usage.candidates_token_count
+                    total_toks = usage.total_token_count
+
+                    cost_per_million = 3.5  # דולר למיליון טוקנים
+                    cost_per_1000 = cost_per_million / 1_000
+                    est_cost = total_toks * cost_per_1000 / 1000
+                    est_cost_1000req = total_toks * cost_per_1000
+
+                    tokens_df = pd.DataFrame([{
+                        "Prompt Tokens": prompt_toks,
+                        "Response Tokens": resp_toks,
+                        "Total Tokens": total_toks,
+                        "Cost per Request ($)": round(est_cost, 4),
+                        "Cost for 1000 Requests ($)": round(est_cost_1000req, 2)
+                    }])
+                    st.markdown("### 📊 שימוש בטוקנים ועלות")
+                    st.dataframe(tokens_df)
+
                 text = resp.candidates[0].content.parts[0].text.strip()
                 if text.startswith("```"):
                     text = text.strip("`").replace("json\n", "").replace("json", "").strip()
@@ -276,10 +258,8 @@ else:
             results_df, methods_info = clean_gemini_output(cars_to_process)
 
             if not results_df.empty:
-                # --- Normalize Gemini values ---
                 results_df = normalize_car_values(results_df)
 
-                # --- חישוב עלויות ---
                 results_df["annual_fuel_cost"] = (
                     profile["annual_km"] / results_df["avg_fuel_consumption"].replace(0, 1)
                 ) * st.session_state.fuel_price
@@ -291,7 +271,6 @@ else:
                     results_df["annual_fee"]
                 )
 
-                # --- טבלה בעברית ---
                 results_df_display = results_df.copy()
                 results_df_display["fuel"] = results_df_display["fuel"].map(fuel_map_he).fillna(results_df_display["fuel"])
                 results_df_display["gear"] = results_df_display["gear"].map(gear_map_he).fillna(results_df_display["gear"])
@@ -301,17 +280,14 @@ else:
                 st.success(f"✅ התקבלו {len(results_df)} רכבים מגימניי.")
                 st.dataframe(results_df_display.reset_index(drop=True))
 
-                # דיסקליימר
                 st.markdown("⚠️ **הבהרה חשובה**: הנתונים הם הערכה גסה של AI בלבד.", unsafe_allow_html=True)
 
-                # --- גרף השוואה ---
                 st.markdown("### 📊 השוואת עלות כוללת שנתית")
                 chart_df = results_df_display[["מותג", "דגם", "שנה", "עלות כוללת שנתית (₪)"]].copy()
                 chart_df["רכב"] = chart_df["מותג"] + " " + chart_df["דגם"] + " " + chart_df["שנה"].astype(str)
                 chart_df = chart_df.set_index("רכב")
                 st.bar_chart(chart_df["עלות כוללת שנתית (₪)"])
 
-                # --- הסברים בעברית ---
                 st.markdown("### 📖 הסברים לכל פרמטר")
                 for i, method in enumerate(methods_info, 1):
                     car_name = f"{results_df.iloc[i-1]['brand']} {results_df.iloc[i-1]['model']} {results_df.iloc[i-1]['year']}"
