@@ -112,6 +112,7 @@ column_map_he = {
     "annual_fee": "אגרה שנתית (₪)",
     "annual_fuel_cost": "עלות דלק שנתית (₪)",
     "total_annual_cost": "עלות כוללת שנתית (₪)",
+    "market_availability": "רמת היצע בשוק",
     "reliability_score": "אמינות",
     "maintenance_cost": "עלות אחזקה (₪/שנה)",
     "safety_rating": "בטיחות",
@@ -125,6 +126,7 @@ column_map_he = {
 method_map_he = {
     "fuel_method": "שיטת חישוב צריכת דלק",
     "fee_method": "שיטת חישוב אגרה",
+    "market_method": "שיטת חישוב היצע",
     "reliability_method": "שיטת חישוב אמינות",
     "maintenance_method": "שיטת חישוב עלות אחזקה",
     "safety_method": "שיטת חישוב בטיחות",
@@ -216,8 +218,8 @@ if not api_key:
     st.warning("לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה.")
 else:
     genai.configure(api_key=api_key)
-    # שימוש במודל הכי חסכוני
-    model_name = "models/gemini-2.5-flash-lite"
+    # שימוש במודל Flash – איזון עלות/איכות
+    model_name = "models/gemini-2.5-flash"
     model = genai.GenerativeModel(model_name)
 
     if st.button("🚀 בקש המלצות מגימניי"):
@@ -231,11 +233,12 @@ else:
         3. search_queries: החזר תמיד את מחרוזות החיפוש שבוצעו בפועל.
         4. חובה להתחשב בהיצע אמיתי בשוק יד שנייה (יד2 או שווקים מקומיים):
            - אם דגם מתאים תיאורטית אך אין לו היצע ממשי בשוק – אל תחזיר אותו.
-           - רמת ההיצע היא גורם חשוב מאוד ויש לתת לה משקל גבוה.
+           - החזר גם פרמטר market_availability (נמוך/בינוני/גבוה) + market_method.
         5. recommended_cars: מערך של 5–10 רכבים. כל רכב חייב לכלול:
            - brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
            - avg_fuel_consumption (ק\"מ/ל', מספר בלבד) + fuel_method
            - annual_fee (₪ לשנה, מספר בלבד) + fee_method
+           - market_availability + market_method
            - reliability_score (מספר 1–10 בלבד) + reliability_method
            - maintenance_cost (₪ לשנה, מספר בלבד) + maintenance_method
            - safety_rating (מספר 1–10 בלבד) + safety_method
@@ -244,7 +247,7 @@ else:
            - performance_score (מספר 1–10 בלבד) + performance_method
            - comfort_features (מספר 1–10 בלבד) + comfort_method
            - suitability (מספר 1–10 בלבד) + suitability_method
-        6. חובה להחזיר אך ורק מספרים עבור כל פרמטר ציון.
+        6. חובה להחזיר אך ורק מספרים עבור כל פרמטר ציון מלבד market_availability (טקסט או דירוג).
         7. חובה להחזיר רכבים שנמכרים בפועל בישראל בלבד ובכמות מספקת בשוק.
         """
 
