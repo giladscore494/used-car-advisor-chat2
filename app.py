@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה סופית עם גרף עלות כוללת + שקלול היצע יד שנייה
+# Car Advisor – גרסה סופית עם גרף עלות כוללת + בדיקת מודלים זמינים
 # =========================================
 
 import streamlit as st
@@ -112,7 +112,6 @@ column_map_he = {
     "annual_fee": "אגרה שנתית (₪)",
     "annual_fuel_cost": "עלות דלק שנתית (₪)",
     "total_annual_cost": "עלות כוללת שנתית (₪)",
-    "market_availability": "רמת היצע בשוק",
     "reliability_score": "אמינות",
     "maintenance_cost": "עלות אחזקה (₪/שנה)",
     "safety_rating": "בטיחות",
@@ -126,7 +125,6 @@ column_map_he = {
 method_map_he = {
     "fuel_method": "שיטת חישוב צריכת דלק",
     "fee_method": "שיטת חישוב אגרה",
-    "market_method": "שיטת חישוב היצע",
     "reliability_method": "שיטת חישוב אמינות",
     "maintenance_method": "שיטת חישוב עלות אחזקה",
     "safety_method": "שיטת חישוב בטיחות",
@@ -218,110 +216,16 @@ if not api_key:
     st.warning("לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה.")
 else:
     genai.configure(api_key=api_key)
-    # שימוש במודל Flash – איזון עלות/איכות
+
+    # בדיקת מודלים זמינים
+    try:
+        available_models = genai.list_models()
+        st.subheader("📋 מודלים זמינים בחשבון:")
+        for m in available_models:
+            st.write(m.name)
+    except Exception as e:
+        st.error(f"שגיאה בבדיקת מודלים זמינים: {e}")
+
+    # שימוש במודל Flash – אם קיים
     model_name = "models/gemini-2.5-flash"
     model = genai.GenerativeModel(model_name)
-
-    if st.button("🚀 בקש המלצות מגימניי"):
-        prompt = f"""
-        אני צריך המלצות לרכבים ללקוח ישראלי. זה הפרופיל:
-        {json.dumps(profile, ensure_ascii=False, indent=2)}
-
-        דרישות לפלט:
-        1. החזר JSON יחיד עם שלושה שדות: "search_performed", "search_queries", "recommended_cars".
-        2. search_performed: תמיד החזר True. עליך תמיד לבצע חיפוש אינטרנטי אמיתי ולא להחזיר False.
-        3. search_queries: החזר תמיד את מחרוזות החיפוש שבוצעו בפועל.
-        4. חובה להתחשב בהיצע אמיתי בשוק יד שנייה (יד2 או שווקים מקומיים):
-           - אם דגם מתאים תיאורטית אך אין לו היצע ממשי בשוק – אל תחזיר אותו.
-           - החזר גם פרמטר market_availability (נמוך/בינוני/גבוה) + market_method.
-        5. recommended_cars: מערך של 5–10 רכבים. כל רכב חייב לכלול:
-           - brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
-           - avg_fuel_consumption (ק\"מ/ל', מספר בלבד) + fuel_method
-           - annual_fee (₪ לשנה, מספר בלבד) + fee_method
-           - market_availability + market_method
-           - reliability_score (מספר 1–10 בלבד) + reliability_method
-           - maintenance_cost (₪ לשנה, מספר בלבד) + maintenance_method
-           - safety_rating (מספר 1–10 בלבד) + safety_method
-           - insurance_cost (₪ לשנה, מספר בלבד) + insurance_method
-           - resale_value (מספר 1–10 בלבד) + resale_method
-           - performance_score (מספר 1–10 בלבד) + performance_method
-           - comfort_features (מספר 1–10 בלבד) + comfort_method
-           - suitability (מספר 1–10 בלבד) + suitability_method
-        6. חובה להחזיר אך ורק מספרים עבור כל פרמטר ציון מלבד market_availability (טקסט או דירוג).
-        7. חובה להחזיר רכבים שנמכרים בפועל בישראל בלבד ובכמות מספקת בשוק.
-        """
-
-        with st.spinner("פונה לגימניי..."):
-            try:
-                resp = model.generate_content(prompt)
-                text = resp.candidates[0].content.parts[0].text.strip()
-                if text.startswith("```"):
-                    text = text.strip("`").replace("json\n", "").replace("json", "").strip()
-                try:
-                    parsed = json.loads(text)
-                except json.JSONDecodeError:
-                    st.error("⚠️ גימניי לא החזיר JSON תקין.")
-                    st.code(text)
-                    parsed = {}
-            except Exception as e:
-                st.error(f"שגיאה בקריאת הפלט מגימניי: {e}")
-                parsed = {}
-
-        if parsed and "recommended_cars" in parsed:
-            search_performed = parsed.get("search_performed", False)
-            search_queries = parsed.get("search_queries", [])
-
-            if search_performed and search_queries:
-                st.info("✅ בוצע חיפוש אינטרנטי לנתוני שוק עדכניים.")
-            else:
-                st.warning("⚠️ לא ברור אם בוצע חיפוש חי. ייתכן שהנתונים חלקיים.")
-
-            cars_to_process = parsed["recommended_cars"]
-            results_df, methods_info = clean_gemini_output(cars_to_process)
-
-            if not results_df.empty:
-                # --- Normalize Gemini values ---
-                results_df = normalize_car_values(results_df)
-
-                # --- חישוב עלויות ---
-                results_df["annual_fuel_cost"] = (
-                    profile["annual_km"] / results_df["avg_fuel_consumption"].replace(0, 1)
-                ) * st.session_state.fuel_price
-
-                results_df["total_annual_cost"] = (
-                    results_df["annual_fuel_cost"] +
-                    results_df["maintenance_cost"] +
-                    results_df["insurance_cost"] +
-                    results_df["annual_fee"]
-                )
-
-                # --- טבלה בעברית ---
-                results_df_display = results_df.copy()
-                results_df_display["fuel"] = results_df_display["fuel"].map(fuel_map_he).fillna(results_df_display["fuel"])
-                results_df_display["gear"] = results_df_display["gear"].map(gear_map_he).fillna(results_df_display["gear"])
-                results_df_display["turbo"] = results_df_display["turbo"].map(turbo_map_he).fillna(results_df_display["turbo"])
-                results_df_display = results_df_display.rename(columns=column_map_he)
-
-                st.success(f"✅ התקבלו {len(results_df)} רכבים מגימניי.")
-                st.dataframe(results_df_display.reset_index(drop=True))
-
-                # דיסקליימר
-                st.markdown("⚠️ **הבהרה חשובה**: הנתונים הם הערכה גסה של AI בלבד.", unsafe_allow_html=True)
-
-                # --- גרף השוואה ---
-                st.markdown("### 📊 השוואת עלות כוללת שנתית")
-                chart_df = results_df_display[["מותג", "דגם", "שנה", "עלות כוללת שנתית (₪)"]].copy()
-                chart_df["רכב"] = chart_df["מותג"] + " " + chart_df["דגם"] + " " + chart_df["שנה"].astype(str)
-                chart_df = chart_df.set_index("רכב")
-                st.bar_chart(chart_df["עלות כוללת שנתית (₪)"])
-
-                # --- הסברים בעברית ---
-                st.markdown("### 📖 הסברים לכל פרמטר")
-                for i, method in enumerate(methods_info, 1):
-                    car_name = f"{results_df.iloc[i-1]['brand']} {results_df.iloc[i-1]['model']} {results_df.iloc[i-1]['year']}"
-                    with st.expander(f"🔎 {car_name} – הסברים"):
-                        for k, v in method.items():
-                            field_he = method_map_he.get(k, k)
-                            st.write(f"- **{field_he}:** {v}")
-            else:
-                st.error("⚠️ לא נמצאו רכבים בפלט.")
