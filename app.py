@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה מלאה עם גרף עלות כוללת, היצע בשוק ומעקב טוקנים עם fallback
+# Car Advisor – גרסה מלאה עם גרף עלות כוללת, היצע בשוק, מעקב טוקנים והגנה לעמודות חסרות
 # =========================================
 
 import streamlit as st
@@ -106,7 +106,7 @@ method_map_he = {
 init_state()
 st.title("🚗 Car Advisor – ייעוץ רכב")
 
-# === שאלון ===
+# === שאלון (שלב 1) ===
 col1, col2, col3 = st.columns([1,1,1])
 with col1: budget_min = st.number_input("תקציב מינימום (₪)", min_value=0, step=1000, value=40000)
 with col2: budget_max = st.number_input("תקציב מקסימום (₪)", min_value=0, step=1000, value=65000)
@@ -234,20 +234,18 @@ else:
                 parsed = {}
 
         if parsed and "recommended_cars" in parsed:
-            search_performed = parsed.get("search_performed", False)
-            search_queries = parsed.get("search_queries", [])
-
-            if search_performed and search_queries:
-                st.info("✅ בוצע חיפוש אינטרנטי לנתוני שוק עדכניים.")
-            else:
-                st.warning("⚠️ לא ברור אם בוצע חיפוש חי.")
-
             cars_to_process = parsed["recommended_cars"]
             results_df, methods_info = clean_gemini_output(cars_to_process)
 
             if not results_df.empty:
                 results_df = normalize_car_values(results_df)
 
+                # --- הגנה לעמודות חסרות ---
+                for col in ["avg_fuel_consumption","maintenance_cost","insurance_cost","annual_fee"]:
+                    if col not in results_df.columns:
+                        results_df[col] = 0
+
+                # --- חישוב עלויות ---
                 results_df["annual_fuel_cost"] = (
                     profile["annual_km"] / results_df["avg_fuel_consumption"].replace(0, 1)
                 ) * st.session_state.fuel_price
@@ -259,6 +257,7 @@ else:
                     results_df["annual_fee"]
                 )
 
+                # --- הצגה בעברית ---
                 results_df_display = results_df.copy()
                 results_df_display["fuel"] = results_df_display["fuel"].map(fuel_map_he).fillna(results_df_display["fuel"])
                 results_df_display["gear"] = results_df_display["gear"].map(gear_map_he).fillna(results_df_display["gear"])
@@ -285,4 +284,3 @@ else:
                             st.write(f"- **{field_he}:** {v}")
             else:
                 st.error("⚠️ לא נמצאו רכבים בפלט.")
-
