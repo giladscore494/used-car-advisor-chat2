@@ -1,20 +1,21 @@
 # app.py
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – גרסה מלאה עם גרף עלות כוללת והיצע בשוק
+# Car Advisor – גרסה מלאה עם גרף עלות כוללת והיצע בשוק (+ חישוב חשמל לרכבים חשמליים)
 # =========================================
 
 import streamlit as st
 import pandas as pd
 import json, os
 from datetime import datetime
+import numpy as np
 import google.generativeai as genai
 
 st.set_page_config(page_title="Car Advisor", page_icon="🚗", layout="wide")
 
 # -------- Helpers --------
 def init_state():
-    for key in ["user_profile","validated_cars","methods_info","fuel_price"]:
+    for key in ["user_profile","validated_cars","methods_info","fuel_price","electricity_price"]:
         if key not in st.session_state:
             st.session_state[key] = None
 
@@ -28,7 +29,7 @@ def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
         "fuel": [f.lower() for f in fuels],
         "gear": [g.lower() for g in gears],
         "turbo_required": None if turbo_required == "any" else (turbo_required == "yes"),
-        "main_use": main_use.strip(),
+        "main_use": main_use.strip(),  # תיאור חופשי (multiline), נשאר באנגלית/חופשי בשדה
         "annual_km": int(annual_km),
         "driver_age": int(driver_age),
         "family_size": family_size,
@@ -69,6 +70,7 @@ def normalize_car_values(df):
     if "gear" in df.columns:
         df["gear"] = df["gear"].replace({
             "אוטומטי": "automatic",
+            "אוטומטית": "automatic",
             "אוטומטי (DSG7)": "automatic",
             "אוטומטי (TCT)": "automatic",
             "אוטומטי (רובוטי)": "automatic",
@@ -108,9 +110,9 @@ column_map_he = {
     "turbo": "טורבו",
     "engine_cc": "נפח מנוע (סמ\"ק)",
     "price_range_nis": "טווח מחיר (₪)",
-    "avg_fuel_consumption": "צריכת דלק ממוצעת (ק\"מ/ל')",
+    "avg_fuel_consumption": "צריכת דלק ממוצעת (ק\"מ/ל')",  # יתעדכן דינאמית אם electric
     "annual_fee": "אגרה שנתית (₪)",
-    "annual_fuel_cost": "עלות דלק שנתית (₪)",
+    "annual_energy_cost": "עלות אנרגיה שנתית (₪)",        # דינאמי דלק/חשמל
     "total_annual_cost": "עלות כוללת שנתית (₪)",
     "reliability_score": "אמינות",
     "maintenance_cost": "עלות אחזקה (₪/שנה)",
@@ -124,7 +126,7 @@ column_map_he = {
 }
 
 method_map_he = {
-    "fuel_method": "שיטת חישוב צריכת דלק",
+    "fuel_method": "שיטת חישוב צריכת דלק/חשמל",
     "fee_method": "שיטת חישוב אגרה",
     "reliability_method": "שיטת חישוב אמינות",
     "maintenance_method": "שיטת חישוב עלות אחזקה",
@@ -150,18 +152,28 @@ with col3:
     with ymin: year_min = st.number_input("שנתון מינימום", min_value=1990, max_value=datetime.now().year, value=2015)
     with ymax: year_max = st.number_input("שנתון מקסימום", min_value=1990, max_value=datetime.now().year, value=2019)
 
+# --- דלק וגיר ---
 fuels_he = st.multiselect("סוגי דלק מועדפים", list(fuel_map.keys()), default=["בנזין"])
-gears_he = st.multiselect("תיבת הילוכים", list(gear_map.keys()), default=["אוטומטית"])
+if "חשמלי" in fuels_he:
+    st.info("נבחר דלק חשמלי — תיבת ההילוכים נקבעת אוטומטית ל'אוטומטית'.")
+    gears_he = ["אוטומטית"]
+else:
+    gears_he = st.multiselect("תיבת הילוכים", list(gear_map.keys()), default=["אוטומטית"])
+
 turbo_choice_he = st.selectbox("טורבו?", list(turbo_map.keys()), index=1)
 
 fuels = [fuel_map[f] for f in fuels_he]
 gears = [gear_map[g] for g in gears_he]
 turbo_choice = turbo_map[turbo_choice_he]
 
+# --- פרטים אישיים ---
 c4, c5, c6 = st.columns([2,1,1])
-with c4: main_use = st.text_input("שימוש עיקרי", value="נסיעה יומיומית")
-with c5: annual_km = st.number_input("נסועה שנתית (ק״מ)", min_value=0, step=1000, value=15000)
-with c6: driver_age = st.number_input("גיל נהג", min_value=16, max_value=100, value=21)
+with c4:
+    main_use = st.text_area("תיאור הרכב והשימוש בו", value="נסיעה יומיומית לעבודה וטיולים קצרים", height=100)
+with c5:
+    annual_km = st.number_input("נסועה שנתית (ק״מ)", min_value=0, step=1000, value=15000)
+with c6:
+    driver_age = st.number_input("גיל נהג", min_value=16, max_value=100, value=21)
 
 c6a, c6b = st.columns(2)
 with c6a: license_years = st.number_input("וותק רישיון (שנים)", min_value=0, max_value=50, value=2)
@@ -186,6 +198,9 @@ body_style = st.selectbox("סגנון מרכב מועדף", ["כללי","סדא�
 driving_style = st.selectbox("סגנון נהיגה", ["רגוע ונינוח","דינמי וספורטיבי"])
 excluded_colors = st.text_input("צבעים לפסילה (מופרדים בפסיק)", value="").split(",")
 
+# --- היצע בשוק ---
+consider_supply = st.radio("האם להתחשב בהיצע בשוק?", ["כן","לא"], index=0)
+
 weights = {
     "reliability": reliability_weight,
     "resale": resale_weight,
@@ -204,10 +219,16 @@ profile["license_years"] = license_years
 profile["driver_gender"] = driver_gender
 profile["insurance_history"] = insurance_history
 profile["violations"] = violations
+profile["consider_market_supply"] = (consider_supply == "כן")
 
+# --- מחירי אנרגיה ---
 fuel_price = st.number_input("מחיר ליטר דלק (₪)", min_value=1.0, max_value=20.0, value=7.0, step=0.1)
+electricity_price = st.number_input("מחיר חשמל לקוט״ש (₪)", min_value=0.1, max_value=5.0, value=0.65, step=0.01)
+
 st.session_state.fuel_price = fuel_price
-profile["fuel_price"] = fuel_price
+st.session_state.electricity_price = electricity_price
+profile["fuel_price_nis_per_liter"] = fuel_price
+profile["electricity_price_nis_per_kwh"] = electricity_price
 
 st.session_state.user_profile = profile
 
@@ -232,7 +253,7 @@ else:
         3. search_queries: החזר תמיד את מחרוזות החיפוש שבוצעו בפועל.
         4. recommended_cars: מערך של 5–10 רכבים. כל רכב חייב לכלול:
            - brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
-           - avg_fuel_consumption (ק\"מ/ל', מספר בלבד) + fuel_method
+           - avg_fuel_consumption (לרכבים רגילים: ק\"מ/ל'; לרכבים חשמליים: קוט\"ש/100 ק\"מ, מספר בלבד) + fuel_method
            - annual_fee (₪ לשנה, מספר בלבד) + fee_method
            - reliability_score (מספר 1–10 בלבד) + reliability_method
            - maintenance_cost (₪ לשנה, מספר בלבד) + maintenance_method
@@ -279,19 +300,55 @@ else:
                 # --- Normalize Gemini values ---
                 results_df = normalize_car_values(results_df)
 
-                # --- חישוב עלויות ---
-                results_df["annual_fuel_cost"] = (
-                    profile["annual_km"] / results_df["avg_fuel_consumption"].replace(0, 1)
-                ) * st.session_state.fuel_price
+                # --- חישוב עלות אנרגיה שנתית ---
+                # הערה: avg_fuel_consumption מפורש כך:
+                #  - לרכב חשמלי: קוט"ש/100 ק"מ
+                #  - לרכב לא-חשמלי: ק"מ לליטר
+                if "avg_fuel_consumption" not in results_df.columns:
+                    st.error("חסר שדה avg_fuel_consumption בפלט.")
+                    st.stop()
 
+                # עזר לזיהוי חשמלי
+                is_ev = results_df["fuel"].str.lower().eq("electric")
+
+                # הגנות חלקיות מחלוקות ב-0
+                km_per_liter = results_df["avg_fuel_consumption"].where(~is_ev, np.nan).replace(0, np.nan)
+                kwh_per_100km = results_df["avg_fuel_consumption"].where(is_ev, np.nan)
+
+                # עלות אנרגיה:
+                annual_km = profile["annual_km"]
+                fuel_price = st.session_state.fuel_price or 7.0
+                elec_price = st.session_state.electricity_price or 0.65
+
+                # דלק: (ק"מ / (ק"מ/ל')) * ₪/ל'
+                fuel_cost = (annual_km / km_per_liter) * fuel_price
+                # חשמל: (ק"מ / 100) * (קוט"ש/100ק"מ) * ₪/קוט"ש
+                elec_cost = (annual_km / 100.0) * kwh_per_100km * elec_price
+
+                results_df["annual_energy_cost"] = np.where(is_ev, elec_cost, fuel_cost)
+                # לשמירת תאימות לאחור
+                results_df["annual_fuel_cost"] = results_df["annual_energy_cost"]
+
+                # --- עלות כוללת ---
+                for col in ["maintenance_cost", "insurance_cost", "annual_fee"]:
+                    if col not in results_df.columns:
+                        results_df[col] = 0.0
                 results_df["total_annual_cost"] = (
-                    results_df["annual_fuel_cost"] +
-                    results_df["maintenance_cost"] +
-                    results_df["insurance_cost"] +
-                    results_df["annual_fee"]
+                    results_df["annual_energy_cost"].fillna(0) +
+                    results_df["maintenance_cost"].fillna(0) +
+                    results_df["insurance_cost"].fillna(0) +
+                    results_df["annual_fee"].fillna(0)
                 )
 
-                # --- טבלה בעברית ---
+                # --- טבלה בעברית: כותרות דינמיות ---
+                # צריכה: אם יש חשמליים → "צריכת חשמל (קוט\"ש/100 ק\"מ)" ; אחרת דלק
+                if "fuel" in results_df.columns and results_df["fuel"].str.lower().eq("electric").any():
+                    column_map_he["avg_fuel_consumption"] = "צריכת חשמל (קוט\"ש/100 ק\"מ)"
+                    column_map_he["annual_energy_cost"] = "עלות חשמל שנתית (₪)"
+                else:
+                    column_map_he["avg_fuel_consumption"] = "צריכת דלק ממוצעת (ק\"מ/ל')"
+                    column_map_he["annual_energy_cost"] = "עלות דלק שנתית (₪)"
+
                 results_df_display = results_df.copy()
                 results_df_display["fuel"] = results_df_display["fuel"].map(fuel_map_he).fillna(results_df_display["fuel"])
                 results_df_display["gear"] = results_df_display["gear"].map(gear_map_he).fillna(results_df_display["gear"])
@@ -302,7 +359,7 @@ else:
                 st.dataframe(results_df_display.reset_index(drop=True))
 
                 # דיסקליימר
-                st.markdown("⚠️ **הבהרה חשובה**: הנתונים הם הערכה גסה של AI בלבד.", unsafe_allow_html=True)
+                st.markdown("⚠️ **הבהרה**: הנתונים הם הערכה גסה של AI; יש לאמת לפני קנייה.", unsafe_allow_html=True)
 
                 # --- גרף השוואה ---
                 st.markdown("### 📊 השוואת עלות כוללת שנתית")
