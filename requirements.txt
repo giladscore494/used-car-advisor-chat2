@@ -1,6 +1,7 @@
-streamlit
-pandas
+streamlit==1.38.0
+pandas==2.2.3
+numpy==1.26.4
 matplotlib
-google-generativeai>=0.7.0
 xlsxwriter
 rapidfuzz
+google-generativeai>=0.8.3
