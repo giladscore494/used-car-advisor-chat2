@@ -349,6 +349,7 @@ Output requirements:
    - avg_fuel_consumption (+ fuel_method):
        * for non-EV: km per liter (number only)
        * for EV: kWh per 100 km (number only)
+      **must return methods explanation only in hebrew** 
    - annual_fee (₪ per year, number only) + fee_method
    - reliability_score (1–10, number only) + reliability_method
    - maintenance_cost (₪/year, number only) + maintenance_method
@@ -359,6 +360,7 @@ Output requirements:
    - comfort_features (1–10, number only) + comfort_method
    - suitability (1–10, number only) + suitability_method
    - market_supply ("גבוה" / "בינוני" / "נמוך") + supply_method
+   **must return methods explanation only in hebrew**
 5) IMPORTANT: All scoring fields must be numbers only (except market_supply which is categorical).
 6) IMPORTANT: Only return car models that are actually sold in Israel.
 """
