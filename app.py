@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 # =========================================
 # Car Advisor – Streamlit Wizard (Modern Blue UI)
-# Logic preserved 1:1; questionnaire in Hebrew; prompt in English
+# All original logic preserved 1:1; questionnaire split into 5 steps
+# Explanations in Hebrew; images removed; no duplicate fuel/energy columns
 # =========================================
 
 import streamlit as st
 import pandas as pd
-import json, os
+import json, os, uuid
 from datetime import datetime
 import numpy as np
 import google.generativeai as genai
@@ -27,17 +28,19 @@ h1,h2,h3 { color: var(--ink) }
 .pill { display:inline-block; background:#eef2ff; color:#273c75; border-radius:9999px; padding:2px 10px; font-weight:600; margin-right:6px;}
 .disclaimer { color:#a16207; background:#fffbeb; border:1px solid #fde68a; padding:8px 12px; border-radius:10px; }
 .card { border:1px solid #e5e7eb; border-radius:14px; padding:10px; }
-.card h4 { margin:6px 0 2px 0; }
-img.card-img { width:100%; height:180px; object-fit:cover; border-radius:10px; }
 .logo { height: 42px; margin-right:8px; vertical-align:middle; }
 .topbar { display:flex; align-items:center; gap:10px; }
+.small-muted { color:#64748b; font-size:12px; }
 </style>
 """, unsafe_allow_html=True)
 
-# -------------------- Helpers (unchanged logic) --------------------
+# -------------------- Helpers (original logic) --------------------
 def init_state():
-    for key in ["user_profile","validated_cars","methods_info","fuel_price","electricity_price","ui_step",
-                "results_df","gemini_raw","search_info"]:
+    for key in [
+        "user_profile","validated_cars","methods_info",
+        "fuel_price","electricity_price","ui_step",
+        "results_df","gemini_raw","search_info"
+    ]:
         if key not in st.session_state:
             st.session_state[key] = None
     if st.session_state.ui_step is None:
@@ -179,20 +182,21 @@ def topbar():
 init_state()
 topbar()
 
-# -------------------- Wizard Nav --------------------
-def nav_buttons(left_label="חזור", right_label="הבא", left_action=None, right_action=None, show_left=True, show_right=True, extra=None):
+# -------------------- Wizard Nav (unique keys) --------------------
+def nav_buttons(left_label="חזור", right_label="הבא",
+                left_action=None, right_action=None,
+                show_left=True, show_right=True, extra=None):
     c1, c2 = st.columns([1,1])
     with c1:
         if show_left:
-            st.button(left_label, on_click=left_action, use_container_width=False, key=f"back_{st.session_state.ui_step}", type="secondary")
+            st.button(left_label, on_click=left_action, use_container_width=False,
+                      key=f"back_{st.session_state.ui_step}_{uuid.uuid4().hex}", type="secondary")
     with c2:
         if extra:
             extra()
         if show_right:
-            st.button(right_label, on_click=right_action, use_container_width=False, key=f"next_{st.session_state.ui_step}", type="primary")
-
-# -------------------- Shared Inputs Storage --------------------
-# Using Streamlit widgets as source of truth (like your original)
+            st.button(right_label, on_click=right_action, use_container_width=False,
+                      key=f"next_{st.session_state.ui_step}_{uuid.uuid4().hex}", type="primary")
 
 # -------------------- STEP 0: START --------------------
 if st.session_state.ui_step == 0:
@@ -205,10 +209,10 @@ if st.session_state.ui_step == 0:
     def go_next(): st.session_state.ui_step = 1
     nav_buttons(show_left=False, right_label="התחל", right_action=go_next)
 
-# -------------------- STEP 1: שאלון בסיסי --------------------
+# -------------------- STEP 1: בסיס (מחיר/שנה/דלק/גיר/טורבו) --------------------
 if st.session_state.ui_step == 1:
     st.markdown('<div class="step">', unsafe_allow_html=True)
-    st.markdown("### שלב 1: שאלון")
+    st.markdown("### שלב 1: בסיס")
 
     col1, col2, col3 = st.columns([1,1,1])
     with col1: budget_min = st.number_input("תקציב מינימום (₪)", min_value=0, step=1000, value=40000)
@@ -227,6 +231,24 @@ if st.session_state.ui_step == 1:
 
     turbo_choice_he = st.selectbox("טורבו?", list(turbo_map.keys()), index=1)
 
+    # שמירה זמנית ב-state של שלב 1
+    st.session_state._step1 = dict(
+        budget_min=budget_min, budget_max=budget_max,
+        year_min=year_min, year_max=year_max,
+        fuels_he=fuels_he, gears_he=gears_he, turbo_choice_he=turbo_choice_he
+    )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    def go_back(): st.session_state.ui_step = 0
+    def go_next(): st.session_state.ui_step = 2
+    nav_buttons(left_action=go_back, right_action=go_next)
+
+# -------------------- STEP 2: שימוש וסגנון --------------------
+if st.session_state.ui_step == 2:
+    st.markdown('<div class="step">', unsafe_allow_html=True)
+    st.markdown("### שלב 2: שימוש וסגנון")
+
     c4, c5, c6 = st.columns([2,1,1])
     with c4:
         main_use = st.text_area("תיאור הרכב והשימוש בו", value="נסיעה יומיומית לעבודה וטיולים קצרים", height=100)
@@ -239,36 +261,39 @@ if st.session_state.ui_step == 1:
     with c6a: license_years = st.number_input("וותק רישיון (שנים)", min_value=0, max_value=50, value=2)
     with c6b: driver_gender = st.selectbox("מין נהג", ["זכר", "נקבה"])
 
-    insurance_history = st.text_input("עבר ביטוחי", value="שנתיים ללא תביעות")
-    violations = st.selectbox("דוחות/שלילות", ["אין", "שלילה בעבר", "נקודות פעילות"])
+    cstyle1, cstyle2, cseats = st.columns([1,1,1])
+    with cstyle1: body_style = st.selectbox("סגנון מרכב מועדף", ["כללי","סדאן","האצ'בק","קרוסאובר/ג'יפון"])
+    with cstyle2: driving_style = st.selectbox("סגנון נהיגה", ["רגוע ונינוח","דינמי וספורטיבי"])
+    with cseats: seats_choice = st.selectbox("מספר מקומות", ["4","5","5+"] )
 
-    cfam, ccargo, csafety = st.columns(3)
-    with cfam: family_size = st.selectbox("גודל משפחה", ["1-2","3-4","5+"])
-    with ccargo: cargo_need = st.selectbox("צורך בתא מטען", ["קטן","בינוני","גדול"])
-    with csafety: safety_required = st.radio("חובה מערכות בטיחות אקטיביות?", ["כן","לא"])
+    excluded_colors = st.text_input("צבעים לפסילה (מופרדים בפסיק)", value="").split(",")
 
-    trim_level = st.selectbox("רמת אבזור", ["בסיסי","סטנדרטי","עשיר"])
+    # שמירה זמנית של שלב 2
+    st.session_state._step2 = dict(
+        main_use=main_use, annual_km=annual_km, driver_age=driver_age,
+        license_years=license_years, driver_gender=driver_gender,
+        body_style=body_style, driving_style=driving_style,
+        seats_choice=seats_choice, excluded_colors=excluded_colors
+    )
 
-    st.markdown("#### סדר עדיפויות (1-5)")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    def go_back(): st.session_state.ui_step = 1
+    def go_next(): st.session_state.ui_step = 3
+    nav_buttons(left_action=go_back, right_action=go_next)
+
+# -------------------- STEP 3: סדר עדיפויות --------------------
+if st.session_state.ui_step == 3:
+    st.markdown('<div class="step">', unsafe_allow_html=True)
+    st.markdown("### שלב 3: סדר עדיפויות")
+
+    st.markdown("#### (1–5)")
     reliability_weight = st.slider("אמינות", 1, 5, 5)
     resale_weight = st.slider("שמירת ערך", 1, 5, 3)
     fuel_weight = st.slider("חיסכון בדלק", 1, 5, 4)
     performance_weight = st.slider("ביצועים", 1, 5, 2)
     comfort_weight = st.slider("נוחות", 1, 5, 3)
 
-    cstyle1, cstyle2, cseats = st.columns([1,1,1])
-    with cstyle1: body_style = st.selectbox("סגנון מרכב מועדף", ["כללי","סדאן","האצ'בק","קרוסאובר/ג'יפון"])
-    with cstyle2: driving_style = st.selectbox("סגנון נהיגה", ["רגוע ונינוח","דינמי וספורטיבי"])
-    with cseats: seats_choice = st.selectbox("מספר מקומות", ["4","5","5+"] )  # שיפור שביקשת
-
-    excluded_colors = st.text_input("צבעים לפסילה (מופרדים בפסיק)", value="").split(",")
-
-    consider_supply = st.radio("האם להתחשב בהיצע בשוק?", ["כן","לא"], index=0)
-
-    fuel_price = st.number_input("מחיר ליטר דלק (₪)", min_value=1.0, max_value=20.0, value=7.0, step=0.1)
-    electricity_price = st.number_input("מחיר חשמל לקוט״ש (₪)", min_value=0.1, max_value=5.0, value=0.65, step=0.01)
-
-    # שמירה ב-state (כמו המקור)
     weights = {
         "reliability": reliability_weight,
         "resale": resale_weight,
@@ -276,76 +301,93 @@ if st.session_state.ui_step == 1:
         "performance": performance_weight,
         "comfort": comfort_weight,
     }
-    fuels = [fuel_map[f] for f in fuels_he]
-    gears = [gear_map[g] for g in gears_he]
-    turbo_choice = turbo_map[turbo_choice_he]
+    st.session_state._step3 = dict(weights=weights)
 
-    profile = make_user_profile(
-        budget_min, budget_max, [year_min, year_max],
-        fuels, gears, turbo_choice, main_use, annual_km, driver_age,
-        family_size, cargo_need, safety_required, trim_level,
-        weights, body_style, driving_style, excluded_colors
-    )
-    # הוספות שאינן משנות חתימה/לוגיקה
-    profile["license_years"] = license_years
-    profile["driver_gender"] = driver_gender
-    profile["insurance_history"] = insurance_history
-    profile["violations"] = violations
-    profile["consider_market_supply"] = (consider_supply == "כן")
-    profile["fuel_price_nis_per_liter"] = fuel_price
-    profile["electricity_price_nis_per_kwh"] = electricity_price
-    profile["seats"] = seats_choice  # שדה חדש לבקשתך (לוגיקה לא משתנה)
-
-    st.session_state.user_profile = profile
-    st.session_state.fuel_price = fuel_price
-    st.session_state.electricity_price = electricity_price
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    def go_back(): st.session_state.ui_step = 0
-    def go_next(): st.session_state.ui_step = 2
-    nav_buttons(left_action=go_back, right_action=go_next)
-
-# -------------------- STEP 2: סוג נסיעה/רכב --------------------
-if st.session_state.ui_step == 2:
-    st.markdown('<div class="step">', unsafe_allow_html=True)
-    st.markdown("### שלב 2: סוג נסיעה וסוג רכב")
-    st.caption("העדפות נקלטו בשלב 1 (סגנון נהיגה + מרכב). אפשר לחזור לשלב 1 לעדכון.")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    def go_back(): st.session_state.ui_step = 1
-    def go_next(): st.session_state.ui_step = 3
-    nav_buttons(left_action=go_back, right_action=go_next)
-
-# -------------------- STEP 3: קריטריונים --------------------
-if st.session_state.ui_step == 3:
-    st.markdown('<div class="step">', unsafe_allow_html=True)
-    st.markdown("### שלב 3: קריטריונים")
-    st.caption("המשקולות הוגדרו כבר בשלב 1. ניתן לחזור לשלב 1 ולעדכן.")
     st.markdown('</div>', unsafe_allow_html=True)
 
     def go_back(): st.session_state.ui_step = 2
     def go_next(): st.session_state.ui_step = 4
     nav_buttons(left_action=go_back, right_action=go_next)
 
-# -------------------- STEP 4: ייעוץ (קריאת Gemini) --------------------
+# -------------------- STEP 4: פרטים אישיים + היצע + מחירי אנרגיה --------------------
 if st.session_state.ui_step == 4:
     st.markdown('<div class="step">', unsafe_allow_html=True)
-    st.markdown("### שלב 4: קבלת ייעוץ")
-    st.write("המערכת תשלח את הפרופיל למודל Gemini ותחזיר רשימת רכבים והסברי שיטה (methods).")
+    st.markdown("### שלב 4: פרטים נוספים")
 
-    api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        st.warning("לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה.")
+    insurance_history = st.text_input("עבר ביטוחי", value="שנתיים ללא תביעות")
+    violations = st.selectbox("דוחות/שלילות", ["אין", "שלילה בעבר", "נקודות פעילות"])
+
+    cfam, ccargo, csafety, ctrim = st.columns([1,1,1,1])
+    with cfam: family_size = st.selectbox("גודל משפחה", ["1-2","3-4","5+"])
+    with ccargo: cargo_need = st.selectbox("צורך בתא מטען", ["קטן","בינוני","גדול"])
+    with csafety: safety_required = st.radio("חובה מערכות בטיחות אקטיביות?", ["כן","לא"])
+    with ctrim: trim_level = st.selectbox("רמת אבזור", ["בסיסי","סטנדרטי","עשיר"])
+
+    consider_supply = st.radio("האם להתחשב בהיצע בשוק?", ["כן","לא"], index=0)
+
+    cfp, cep = st.columns([1,1])
+    with cfp: fuel_price = st.number_input("מחיר ליטר דלק (₪)", min_value=1.0, max_value=20.0, value=7.0, step=0.1)
+    with cep: electricity_price = st.number_input("מחיר חשמל לקוט״ש (₪)", min_value=0.1, max_value=5.0, value=0.65, step=0.01)
+
+    st.session_state._step4 = dict(
+        insurance_history=insurance_history, violations=violations,
+        family_size=family_size, cargo_need=cargo_need, safety_required=safety_required,
+        trim_level=trim_level, consider_supply=consider_supply,
+        fuel_price=fuel_price, electricity_price=electricity_price
+    )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    def go_back(): st.session_state.ui_step = 3
+    def go_next(): st.session_state.ui_step = 5
+    nav_buttons(left_action=go_back, right_action=go_next, right_label="המשך לייעוץ")
+
+# -------------------- STEP 5: ייעוץ (Gemini) + תוצאות --------------------
+if st.session_state.ui_step == 5:
+    st.markdown('<div class="step">', unsafe_allow_html=True)
+    st.markdown("### שלב 5: קבלת ייעוץ ותוצאות")
+
+    # בניית הפרופיל (כמו במקור, עם תוספות אחרי היצירה)
+    s1, s2, s3, s4 = st.session_state._step1, st.session_state._step2, st.session_state._step3, st.session_state._step4
+    if not all([s1, s2, s3, s4]):
+        st.error("חסרים נתונים בשלבים קודמים. חזור אחורה והשלם.")
     else:
-        genai.configure(api_key=api_key)
-        model_name = "models/gemini-2.5-pro"
-        model = genai.GenerativeModel(model_name)
+        fuels = [fuel_map[f] for f in (s1["fuels_he"] or [])]
+        gears = [gear_map[g] for g in (s1["gears_he"] or [])]
+        turbo_choice = turbo_map[s1["turbo_choice_he"]]
+        weights = s3["weights"]
 
-        if st.button("🚀 בקש המלצות מג׳מיני"):
-            profile = st.session_state.user_profile
-            # Prompt באנגלית (אותה דרישה לוגית 1:1)
-            prompt = f"""
+        profile = make_user_profile(
+            s1["budget_min"], s1["budget_max"], [s1["year_min"], s1["year_max"]],
+            fuels, gears, turbo_choice, s2["main_use"], s2["annual_km"], s2["driver_age"],
+            s4["family_size"], s4["cargo_need"], s4["safety_required"], s4["trim_level"],
+            weights, s2["body_style"], s2["driving_style"], s2["excluded_colors"]
+        )
+        # תוספות כמו במקור (שמירה 1:1)
+        profile["license_years"] = s2["license_years"]
+        profile["driver_gender"] = s2["driver_gender"]
+        profile["insurance_history"] = s4["insurance_history"]
+        profile["violations"] = s4["violations"]
+        profile["consider_market_supply"] = (s4["consider_supply"] == "כן")
+        profile["fuel_price_nis_per_liter"] = s4["fuel_price"]
+        profile["electricity_price_nis_per_kwh"] = s4["electricity_price"]
+        profile["seats"] = s2["seats_choice"]  # שדה למידע בלבד (לא משנה לוגיקה)
+
+        st.session_state.user_profile = profile
+        st.session_state.fuel_price = s4["fuel_price"]
+        st.session_state.electricity_price = s4["electricity_price"]
+
+        api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            st.warning("לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה.")
+        else:
+            genai.configure(api_key=api_key)
+            model_name = "models/gemini-2.5-pro"
+            model = genai.GenerativeModel(model_name)
+
+            if st.button("🚀 בקש המלצות מג׳מיני"):
+                # Prompt באנגלית (זהה לוגית, בלי image_url)
+                prompt = f"""
 Please recommend cars for an Israeli customer. Here is the user profile (JSON):
 {json.dumps(profile, ensure_ascii=False, indent=2)}
 
@@ -370,146 +412,144 @@ Output requirements:
    - market_supply ("גבוה" / "בינוני" / "נמוך") + supply_method
 5) IMPORTANT: All scoring fields must be numbers only (except market_supply which is categorical).
 6) IMPORTANT: Only return car models that are actually sold in Israel.
-7) Optional: if you have a freely usable image URL for the specific model, include "image_url". If not, omit it.
 """
-            with st.spinner("פונה לגימניי..."):
-                try:
-                    resp = model.generate_content(prompt)
-                    text = resp.candidates[0].content.parts[0].text.strip()
-                    if text.startswith("```"):
-                        text = text.strip("`").replace("json\n", "").replace("json", "").strip()
+                with st.spinner("פונה לג׳מיני..."):
                     try:
-                        parsed = json.loads(text)
-                    except json.JSONDecodeError:
-                        st.error("⚠️ ג׳מיני לא החזיר JSON תקין.")
-                        st.code(text, language="json")
+                        resp = model.generate_content(prompt)
+                        text = resp.candidates[0].content.parts[0].text.strip()
+                        if text.startswith("```"):
+                            text = text.strip("`").replace("json\n", "").replace("json", "").strip()
+                        try:
+                            parsed = json.loads(text)
+                        except json.JSONDecodeError:
+                            st.error("⚠️ ג׳מיני לא החזיר JSON תקין.")
+                            st.code(text, language="json")
+                            parsed = {}
+                    except Exception as e:
+                        st.error(f"שגיאה בקריאת הפלט מג׳מיני: {e}")
                         parsed = {}
-                except Exception as e:
-                    st.error(f"שגיאה בקריאת הפלט מג׳מיני: {e}")
-                    parsed = {}
 
-            if parsed and "recommended_cars" in parsed:
-                search_performed = parsed.get("search_performed", False)
-                search_queries = parsed.get("search_queries", [])
-                st.session_state.search_info = {"search_performed": search_performed, "search_queries": search_queries}
+                if parsed and "recommended_cars" in parsed:
+                    search_performed = parsed.get("search_performed", False)
+                    search_queries = parsed.get("search_queries", [])
+                    st.session_state.search_info = {"search_performed": search_performed, "search_queries": search_queries}
 
-                if search_performed and search_queries:
-                    st.info("✅ בוצע חיפוש אינטרנטי לנתוני שוק עדכניים.")
-                else:
-                    st.warning("⚠️ לא ברור אם בוצע חיפוש חי. ייתכן שהנתונים חלקיים.")
-
-                cars_to_process = parsed["recommended_cars"]
-                results_df, methods_info = clean_gemini_output(cars_to_process)
-
-                if not results_df.empty:
-                    # Normalize
-                    results_df = normalize_car_values(results_df)
-
-                    if "avg_fuel_consumption" not in results_df.columns:
-                        st.error("חסר שדה avg_fuel_consumption בפלט.")
-                        st.stop()
-
-                    is_ev = results_df["fuel"].str.lower().eq("electric")
-                    km_per_liter = results_df["avg_fuel_consumption"].where(~is_ev, np.nan).replace(0, np.nan)
-                    kwh_per_100km = results_df["avg_fuel_consumption"].where(is_ev, np.nan)
-
-                    annual_km = profile["annual_km"]
-                    fuel_price = st.session_state.fuel_price or 7.0
-                    elec_price = st.session_state.electricity_price or 0.65
-
-                    fuel_cost = (annual_km / km_per_liter) * fuel_price
-                    elec_cost = (annual_km / 100.0) * kwh_per_100km * elec_price
-
-                    results_df["annual_energy_cost"] = np.where(is_ev, elec_cost, fuel_cost)
-                    results_df["annual_fuel_cost"] = results_df["annual_energy_cost"]
-
-                    for col in ["maintenance_cost", "insurance_cost", "annual_fee"]:
-                        if col not in results_df.columns:
-                            results_df[col] = 0.0
-
-                    results_df["total_annual_cost"] = (
-                        results_df["annual_energy_cost"].fillna(0) +
-                        results_df["maintenance_cost"].fillna(0) +
-                        results_df["insurance_cost"].fillna(0) +
-                        results_df["annual_fee"].fillna(0)
-                    )
-
-                    # כותרות צריכה דינמיות
-                    if results_df["fuel"].str.lower().eq("electric").any():
-                        column_map_he["avg_fuel_consumption"] = "צריכת חשמל (קוט\"ש/100 ק\"מ)"
-                        column_map_he["annual_energy_cost"] = "עלות חשמל שנתית (₪)"
+                    if search_performed and search_queries:
+                        st.info("✅ בוצע חיפוש אינטרנטי לנתוני שוק עדכניים.")
                     else:
-                        column_map_he["avg_fuel_consumption"] = "צריכת דלק ממוצעת (ק\"מ/ל')"
-                        column_map_he["annual_energy_cost"] = "עלות דלק שנתית (₪)"
+                        st.warning("⚠️ לא ברור אם בוצע חיפוש חי. ייתכן שהנתונים חלקיים.")
 
-                    results_df_display = results_df.copy()
-                    results_df_display["fuel"] = results_df_display["fuel"].map(fuel_map_he).fillna(results_df_display["fuel"])
-                    results_df_display["gear"] = results_df_display["gear"].map(gear_map_he).fillna(results_df_display["gear"])
-                    results_df_display["turbo"] = results_df_display["turbo"].map(turbo_map_he).fillna(results_df_display["turbo"])
-                    results_df_display = results_df_display.rename(columns=column_map_he)
+                    cars_to_process = parsed["recommended_cars"]
+                    results_df, methods_info = clean_gemini_output(cars_to_process)
 
-                    st.session_state.results_df = results_df
-                    st.session_state.methods_info = methods_info
-                    st.success(f"✅ התקבלו {len(results_df)} רכבים מג׳מיני.")
+                    if not results_df.empty:
+                        # Normalize
+                        results_df = normalize_car_values(results_df)
 
-                    # מעבר לשלב 5
-                    st.session_state.ui_step = 5
+                        if "avg_fuel_consumption" not in results_df.columns:
+                            st.error("חסר שדה avg_fuel_consumption בפלט.")
+                            st.stop()
+
+                        is_ev = results_df["fuel"].str.lower().eq("electric")
+                        km_per_liter = results_df["avg_fuel_consumption"].where(~is_ev, np.nan).replace(0, np.nan)
+                        kwh_per_100km = results_df["avg_fuel_consumption"].where(is_ev, np.nan)
+
+                        annual_km = profile["annual_km"]
+                        fuel_price = st.session_state.fuel_price or 7.0
+                        elec_price = st.session_state.electricity_price or 0.65
+
+                        fuel_cost = (annual_km / km_per_liter) * fuel_price
+                        elec_cost = (annual_km / 100.0) * kwh_per_100km * elec_price
+
+                        results_df["annual_energy_cost"] = np.where(is_ev, elec_cost, fuel_cost)
+                        # לשמירת תאימות לאחור – אבל לא נציג את העמודה האנגלית בהמשך
+                        results_df["annual_fuel_cost"] = results_df["annual_energy_cost"]
+
+                        for col in ["maintenance_cost", "insurance_cost", "annual_fee"]:
+                            if col not in results_df.columns:
+                                results_df[col] = 0.0
+
+                        results_df["total_annual_cost"] = (
+                            results_df["annual_energy_cost"].fillna(0) +
+                            results_df["maintenance_cost"].fillna(0) +
+                            results_df["insurance_cost"].fillna(0) +
+                            results_df["annual_fee"].fillna(0)
+                        )
+
+                        # כותרות צריכה דינמיות בעברית
+                        if results_df["fuel"].str.lower().eq("electric").any():
+                            column_map_he["avg_fuel_consumption"] = "צריכת חשמל (קוט\"ש/100 ק\"מ)"
+                            column_map_he["annual_energy_cost"] = "עלות חשמל שנתית (₪)"
+                        else:
+                            column_map_he["avg_fuel_consumption"] = "צריכת דלק ממוצעת (ק\"מ/ל')"
+                            column_map_he["annual_energy_cost"] = "עלות דלק שנתית (₪)"
+
+                        results_df_display = results_df.copy()
+                        # הסרת כפילות: לא מציגים את העמודה האנגלית
+                        if "annual_fuel_cost" in results_df_display.columns:
+                            results_df_display = results_df_display.drop(columns=["annual_fuel_cost"])
+
+                        results_df_display["fuel"] = results_df_display["fuel"].map(fuel_map_he).fillna(results_df_display["fuel"])
+                        results_df_display["gear"] = results_df_display["gear"].map(gear_map_he).fillna(results_df_display["gear"])
+                        results_df_display["turbo"] = results_df_display["turbo"].map(turbo_map_he).fillna(results_df_display["turbo"])
+                        results_df_display = results_df_display.rename(columns=column_map_he)
+
+                        # לוודא שגם אחרי rename אין עמודה אנגלית מיותרת
+                        if "annual_fuel_cost" in results_df_display.columns:
+                            results_df_display = results_df_display.drop(columns=["annual_fuel_cost"])
+
+                        st.session_state.results_df = results_df
+                        st.session_state.methods_info = methods_info
+                        st.success(f"✅ התקבלו {len(results_df)} רכבים מג׳מיני.")
+
                 else:
                     st.error("⚠️ לא נמצאו רכבים בפלט.")
-    st.markdown('</div>', unsafe_allow_html=True)
 
-    def go_back(): st.session_state.ui_step = 3
-    nav_buttons(left_action=go_back, show_right=False)
-
-# -------------------- STEP 5: תוצאות --------------------
-if st.session_state.ui_step == 5:
-    st.markdown('<div class="step">', unsafe_allow_html=True)
-    st.markdown("### שלב 5: תוצאות והוצאה שנתית")
-    st.markdown('<div class="disclaimer">⚠️ הנתונים הם הערכה גסה של AI; יש לאמת לפני קנייה.</div>', unsafe_allow_html=True)
-
+    # תוצאות (אם קיימות)
     results_df = st.session_state.results_df
     methods_info = st.session_state.methods_info or []
 
-    if results_df is None or results_df.empty:
-        st.error("אין תוצאות להצגה.")
-    else:
-        display_df = results_df.copy()
-        display_df["fuel"] = display_df["fuel"].map(fuel_map_he).fillna(display_df["fuel"])
-        display_df["gear"] = display_df["gear"].map(gear_map_he).fillna(display_df["gear"])
-        display_df["turbo"] = display_df["turbo"].map(turbo_map_he).fillna(display_df["turbo"])
-        display_df = display_df.rename(columns=column_map_he)
+    if results_df is not None and not results_df.empty:
+        results_df_display = results_df.copy()
+        # הסרת העמודה האנגלית אם קיימת
+        if "annual_fuel_cost" in results_df_display.columns:
+            results_df_display = results_df_display.drop(columns=["annual_fuel_cost"])
 
-        st.dataframe(display_df.reset_index(drop=True), use_container_width=True)
+        results_df_display["fuel"] = results_df_display["fuel"].map(fuel_map_he).fillna(results_df_display["fuel"])
+        results_df_display["gear"] = results_df_display["gear"].map(gear_map_he).fillna(results_df_display["gear"])
+        results_df_display["turbo"] = results_df_display["turbo"].map(turbo_map_he).fillna(results_df_display["turbo"])
+        results_df_display = results_df_display.rename(columns=column_map_he)
 
+        st.markdown('<div class="disclaimer">⚠️ הנתונים הם הערכה גסה של AI; יש לאמת לפני קנייה.</div>', unsafe_allow_html=True)
+        st.dataframe(results_df_display.reset_index(drop=True), use_container_width=True)
+
+        # גרף עלות כוללת שנתית (נשאר)
         st.markdown("### 📊 השוואת עלות כוללת שנתית")
-        chart_df = display_df[["מותג", "דגם", "שנה", "עלות כוללת שנתית (₪)"]].copy()
+        chart_df = results_df_display[["מותג", "דגם", "שנה", "עלות כוללת שנתית (₪)"]].copy()
         chart_df["רכב"] = chart_df["מותג"] + " " + chart_df["דגם"] + " " + chart_df["שנה"].astype(str)
         chart_df = chart_df.set_index("רכב")
         st.bar_chart(chart_df["עלות כוללת שנתית (₪)"])
 
-        st.markdown("### 🖼️ רכבים (תמונות + פירוט)")
-        cols = st.columns(3)
-        for i, row in display_df.iterrows():
-            with cols[i % 3]:
-                st.markdown('<div class="card">', unsafe_allow_html=True)
-                image_url = results_df.iloc[i].get("image_url", None)
-                if image_url:
-                    st.markdown(f'<img src="{image_url}" class="card-img"/>', unsafe_allow_html=True)
-                else:
-                    st.markdown('<div style="font-size:54px;text-align:center;">🚗</div>', unsafe_allow_html=True)
-                st.markdown(f"<h4>{row['מותג']} {row['דגם']} {row['שנה']}</h4>", unsafe_allow_html=True)
+        # הסברים מפורטים בעברית לכל רכב (במקום methods באנגלית)
+        st.markdown("### 📝 הסברים מפורטים לכל רכב")
+        for i, row in results_df_display.iterrows():
+            car_name = f"{row['מותג']} {row['דגם']} {row['שנה']}"
+            with st.expander(f"📝 הסבר מפורט על {car_name}"):
                 st.caption(f"דלק: {row['דלק']} | תיבה: {row['תיבה']} | טורבו: {row['טורבו']}")
                 if "טווח מחיר (₪)" in row:
                     st.write(f"**טווח מחיר:** {row['טווח מחיר (₪)']}")
                 st.write(f"**עלות שנתית:** {float(row['עלות כוללת שנתית (₪)']):.0f} ₪")
 
-                # הסברי שיטה
-                with st.expander("🔎 הסברי שיטה (methods)"):
-                    method = methods_info[i] if i < len(methods_info) else {}
+                method = methods_info[i] if i < len(methods_info) else {}
+                if method:
+                    # יצירת טקסט בעברית לפי המיפוי הקיים
+                    lines = []
                     for k, v in method.items():
                         field_he = method_map_he.get(k, k)
-                        st.write(f"- **{field_he}:** {v}")
-                st.markdown('</div>', unsafe_allow_html=True)
+                        lines.append(f"- **{field_he}:** {v}")
+                    st.markdown("\n".join(lines))
+                else:
+                    st.write("אין הסברים מפורטים זמינים לפריט זה.")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
