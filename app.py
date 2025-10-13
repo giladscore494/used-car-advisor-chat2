@@ -1,342 +1,63 @@
 # -*- coding: utf-8 -*-
-# =========================================
-# Car Advisor – גרסה סופית (Modern Blue)
-# שאלון 5 שלבים • הסברים בעברית • ללא תמונות
-# =========================================
+# =====================================================================================
+# Car Advisor – A/B Harness (Gemini "Tool" Prompt vs ChatGPT "User")
+# 50 שאלונים אמיתיים (סימולציה) • Gemini עם פרומפט מקצועי מחייב "חיפוש" • GPT רק עם הפרופיל
+# כולל:
+# - סטטוס חי (ספינר) לאיזה שאלון ואיזה כלי רץ עכשיו
+# - Retry לכל API
+# - Evaluator (GPT) שנותן ציון לכל מודל בכל שאלון + נימוק + מעבר על כל הרכבים
+# - טבלת פלט אחודה מוכנה לניתוח + יצוא CSV
+# - שמירה מסודרת לכל הרשומות (JSON) ולסיכומים
+# =====================================================================================
+import os, json, time, random, traceback
+from datetime import datetime
+from typing import Dict, Any, List, Optional
 
 import streamlit as st
 import pandas as pd
-import json, os, uuid
-from datetime import datetime
-import numpy as np
 import google.generativeai as genai
+from json_repair import repair_json
 
-# --------------------------------------------------
-# עיצוב כללי
-# --------------------------------------------------
-st.set_page_config(page_title="Car Advisor", page_icon="🚗", layout="wide")
+# OpenAI SDK
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
 
-st.markdown("""
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Rubik:wght@300;400;500;700&display=swap" rel="stylesheet">
-<style>
-:root { --primary:#2259b4; --accent:#ff7a18; --ink:#0f172a; --sub:#64748b; }
-html, body, [class*="css"] { font-family: 'Inter','Rubik',system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial !important; }
-h1,h2,h3 { color: var(--ink) }
-.step { background:#fff; border-radius:16px; box-shadow:0 10px 24px rgba(0,0,0,.06); padding:18px; margin-bottom:20px; }
-.pill { display:inline-block; background:#eef2ff; color:#273c75; border-radius:9999px; padding:2px 10px; font-weight:600; margin-right:6px;}
-.disclaimer { color:#a16207; background:#fffbeb; border:1px solid #fde68a; padding:8px 12px; border-radius:10px; }
-.logo { height: 42px; margin-right:8px; vertical-align:middle; }
-.topbar { display:flex; align-items:center; gap:10px; }
-</style>
-""", unsafe_allow_html=True)
+# -------------------------------------------------------------------------------------
+# CONFIG
+# -------------------------------------------------------------------------------------
+st.set_page_config(page_title="Car Advisor – A/B Impact Test", page_icon="🚗", layout="wide")
 
-# --------------------------------------------------
-# פונקציות עזר (הלוגיקה המקורית נשמרה)
-# --------------------------------------------------
-def init_state():
-    for key in ["user_profile","validated_cars","methods_info","fuel_price","electricity_price","ui_step","results_df","search_info"]:
-        if key not in st.session_state:
-            st.session_state[key] = None
-    if st.session_state.ui_step is None:
-        st.session_state.ui_step = 0
+GEMINI_MODEL = "gemini-2.5-flash"
+OPENAI_MODEL = "gpt-4o-mini"  # ניתן להחליף לפי הצורך
 
-def make_user_profile(budget_min, budget_max, years_range, fuels, gears,
-                      turbo_required, main_use, annual_km, driver_age,
-                      family_size, cargo_need, safety_required,
-                      trim_level, weights, body_style, driving_style, excluded_colors):
-    return {
-        "budget_nis": [float(budget_min), float(budget_max)],
-        "years": [int(years_range[0]), int(years_range[1])],
-        "fuel": [f.lower() for f in fuels],
-        "gear": [g.lower() for g in gears],
-        "turbo_required": None if turbo_required == "any" else (turbo_required == "yes"),
-        "main_use": main_use.strip(),
-        "annual_km": int(annual_km),
-        "driver_age": int(driver_age),
-        "family_size": family_size,
-        "cargo_need": cargo_need,
-        "safety_required": safety_required,
-        "trim_level": trim_level,
-        "weights": weights,
-        "body_style": body_style,
-        "driving_style": driving_style,
-        "excluded_colors": excluded_colors,
-    }
+RUN_DIR = "runs"
+os.makedirs(RUN_DIR, exist_ok=True)
+ROWS_PATH = os.path.join(RUN_DIR, "ab_rows.json")        # כל הרשומות (פרופיל+פלטים+הערכה)
+SUMMARY_PATH = os.path.join(RUN_DIR, "ab_summaries.json") # סיכומים
+LAST_CSV_PATH = os.path.join(RUN_DIR, "ab_results_last.csv")
 
-def clean_gemini_output(cars_raw):
-    records, methods = [], []
-    for car in cars_raw:
-        if not isinstance(car, dict):
-            continue
-        record, method = {}, {}
-        for k, v in car.items():
-            if k.endswith("_method"):
-                method[k] = v
-            else:
-                record[k] = v
-        records.append(record)
-        methods.append(method)
-    return pd.DataFrame(records), methods
+# Secrets
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 
-def normalize_car_values(df):
-    if "fuel" in df.columns:
-        df["fuel"] = df["fuel"].replace({
-            "בנזין": "gasoline",
-            "דיזל": "diesel",
-            "היברידי": "hybrid",
-            "דיזל היברידי": "hybrid-diesel",
-            "חשמלי": "electric"
-        })
-    if "gear" in df.columns:
-        df["gear"] = df["gear"].replace({
-            "אוטומטי": "automatic",
-            "אוטומטית": "automatic",
-            "אוטומטי (DSG7)": "automatic",
-            "אוטומטי (TCT)": "automatic",
-            "אוטומטי (רובוטי)": "automatic",
-            "ידני": "manual",
-            "ידנית": "manual"
-        })
-    if "turbo" in df.columns:
-        df["turbo"] = df["turbo"].replace({"כן": True, "לא": False, True: True, False: False})
-    return df
+if not GEMINI_API_KEY:
+    st.warning("⚠️ חסר GEMINI_API_KEY ב-.streamlit/secrets.toml")
+if not OPENAI_API_KEY:
+    st.warning("⚠️ חסר OPENAI_API_KEY ב-.streamlit/secrets.toml")
 
-# --------------------------------------------------
-# מיפויים
-# --------------------------------------------------
-fuel_map = {"בנזין":"gasoline","היברידי":"hybrid","דיזל היברידי":"hybrid-diesel","דיזל":"diesel","חשמלי":"electric"}
-gear_map = {"אוטומטית":"automatic","ידנית":"manual"}
-turbo_map = {"לא משנה":"any","כן":"yes","לא":"no"}
+# Init clients
+genai.configure(api_key=GEMINI_API_KEY)
+gemini = genai.GenerativeModel(GEMINI_MODEL)
+oa = OpenAI(api_key=OPENAI_API_KEY) if (OPENAI_API_KEY and OpenAI) else None
 
-fuel_map_he = {v:k for k,v in fuel_map.items()}
-gear_map_he = {v:k for k,v in gear_map.items()}
-turbo_map_he = {"yes":"כן","no":"לא","any":"לא משנה",True:"כן",False:"לא"}
-
-column_map_he = {
-    "brand":"מותג","model":"דגם","year":"שנה","fuel":"דלק","gear":"תיבה","turbo":"טורבו","engine_cc":"נפח מנוע (סמ\"ק)",
-    "price_range_nis":"טווח מחיר (₪)","avg_fuel_consumption":"צריכת דלק ממוצעת (ק\"מ/ל')","annual_fee":"אגרה שנתית (₪)",
-    "annual_energy_cost":"עלות דלק שנתית (₪)","total_annual_cost":"עלות כוללת שנתית (₪)",
-    "reliability_score":"אמינות","maintenance_cost":"עלות אחזקה (₪/שנה)","safety_rating":"בטיחות",
-    "insurance_cost":"עלות ביטוח (₪/שנה)","resale_value":"שמירת ערך","performance_score":"ביצועים",
-    "comfort_features":"נוחות","suitability":"התאמה","market_supply":"היצע בשוק"
-}
-
-method_map_he = {
-    "fuel_method":"שיטת חישוב צריכת דלק/חשמל","fee_method":"שיטת חישוב אגרה","reliability_method":"שיטת חישוב אמינות",
-    "maintenance_method":"שיטת חישוב עלות אחזקה","safety_method":"שיטת חישוב בטיחות","insurance_method":"שיטת חישוב ביטוח",
-    "resale_method":"שיטת חישוב שמירת ערך","performance_method":"שיטת חישוב ביצועים","comfort_method":"שיטת חישוב נוחות",
-    "suitability_method":"שיטת חישוב התאמה","supply_method":"שיטת קביעת היצע"
-}
-
-# --------------------------------------------------
-# Init + Header
-# --------------------------------------------------
-def topbar():
-    st.markdown(
-        '<div class="topbar"><img src="https://em-content.zobj.net/source/microsoft-teams/363/automobile_1f697.png" class="logo"/>'
-        '<div><div style="font-weight:700;color:#0f172a;font-size:22px;">Car Advisor</div>'
-        '<div style="color:#64748b;font-size:13px;">ייעוץ רכב • Smart Wizard</div></div>'
-        '<span class="pill">Modern</span><span class="pill">Fast</span><span class="pill">Clean</span></div>',
-        unsafe_allow_html=True)
-    st.markdown("---")
-
-init_state()
-for _k in ["_step1","_step2","_step3","_step4"]:
-    if _k not in st.session_state:
-        st.session_state[_k] = None
-topbar()
-
-# --------------------------------------------------
-# פונקציית ניווט (מזהים ייחודיים כדי למנוע DuplicateKey)
-# --------------------------------------------------
-def nav_buttons(left_label="חזור", right_label="הבא",
-                left_action=None, right_action=None,
-                show_left=True, show_right=True):
-    c1,c2 = st.columns([1,1])
-    with c1:
-        if show_left:
-            st.button(left_label, on_click=left_action, key=f"back_{st.session_state.ui_step}_{uuid.uuid4().hex}")
-    with c2:
-        if show_right:
-            st.button(right_label, on_click=right_action, key=f"next_{st.session_state.ui_step}_{uuid.uuid4().hex}")
-
-# --------------------------------------------------
-# שלב 0 – פתיחה
-# --------------------------------------------------
-if st.session_state.ui_step == 0:
-    st.markdown('<div class="step">', unsafe_allow_html=True)
-    st.subheader("ברוך הבא ל-Car Advisor")
-    st.write("מצא את הרכב המתאים לך בקלות. לחיצה על 'התחל' תוביל אותך לשאלון קצר.")
-    st.markdown('</div>', unsafe_allow_html=True)
-    def go_next(): st.session_state.ui_step = 1
-    nav_buttons(show_left=False, right_label="התחל", right_action=go_next)
-
-# --------------------------------------------------
-# שלב 1 – פרטים בסיסיים
-# --------------------------------------------------
-elif st.session_state.ui_step == 1:
-    st.markdown('<div class="step">', unsafe_allow_html=True)
-    st.markdown("### שלב 1: פרטים בסיסיים")
-    c1, c2, c3 = st.columns([1,1,1])
-    with c1: budget_min = st.number_input("תקציב מינימום (₪)", min_value=0, step=1000, value=40000)
-    with c2: budget_max = st.number_input("תקציב מקסימום (₪)", min_value=0, step=1000, value=65000)
-    with c3:
-        ymin, ymax = st.columns(2)
-        with ymin: year_min = st.number_input("שנתון מינימום", 1990, datetime.now().year, 2015)
-        with ymax: year_max = st.number_input("שנתון מקסימום", 1990, datetime.now().year, 2019)
-    fuels_he = st.multiselect("סוגי דלק מועדפים", list(fuel_map.keys()), default=["בנזין"])
-    if "חשמלי" in fuels_he:
-        st.info("נבחר דלק חשמלי — תיבת ההילוכים תוגדר כ'אוטומטית'.")
-        gears_he = ["אוטומטית"]
-    else:
-        gears_he = st.multiselect("תיבת הילוכים", list(gear_map.keys()), default=["אוטומטית"])
-    turbo_choice_he = st.selectbox("טורבו?", list(turbo_map.keys()), index=1)
-    st.session_state._step1 = dict(
-        budget_min=budget_min, budget_max=budget_max,
-        year_min=year_min, year_max=year_max,
-        fuels_he=fuels_he, gears_he=gears_he, turbo_choice_he=turbo_choice_he
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
-    def back(): st.session_state.ui_step = 0
-    def next(): st.session_state.ui_step = 2
-    nav_buttons(left_label="חזור", right_label="הבא", left_action=back, right_action=next)
-
-# --------------------------------------------------
-# שלב 2 – שימוש וסגנון
-# --------------------------------------------------
-elif st.session_state.ui_step == 2:
-    st.markdown('<div class="step">', unsafe_allow_html=True)
-    st.markdown("### שלב 2: שימוש וסגנון")
-    c4, c5, c6 = st.columns([2,1,1])
-    with c4:
-        main_use = st.text_area("תיאור הרכב והשימוש בו", value="נסיעה יומיומית לעבודה וטיולים קצרים", height=100)
-    with c5:
-        annual_km = st.number_input("נסועה שנתית (ק״מ)", min_value=0, step=1000, value=15000)
-    with c6:
-        driver_age = st.number_input("גיל נהג", min_value=16, max_value=100, value=21)
-    c6a, c6b = st.columns(2)
-    with c6a: license_years = st.number_input("וותק רישיון (שנים)", min_value=0, max_value=50, value=2)
-    with c6b: driver_gender = st.selectbox("מין נהג", ["זכר", "נקבה"])
-    cstyle1, cstyle2, cseats = st.columns([1,1,1])
-    with cstyle1: body_style = st.selectbox("סגנון מרכב מועדף", ["כללי","סדאן","האצ'בק","קרוסאובר/ג'יפון"])
-    with cstyle2: driving_style = st.selectbox("סגנון נהיגה", ["רגוע ונינוח","דינמי וספורטיבי"])
-    with cseats: seats_choice = st.selectbox("מספר מקומות", ["4","5","5+"] )
-    excluded_colors = st.text_input("צבעים לפסילה (מופרדים בפסיק)", value="").split(",")
-    st.session_state._step2 = dict(
-        main_use=main_use, annual_km=annual_km, driver_age=driver_age,
-        license_years=license_years, driver_gender=driver_gender,
-        body_style=body_style, driving_style=driving_style,
-        seats_choice=seats_choice, excluded_colors=excluded_colors
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
-    def back(): st.session_state.ui_step = 1
-    def next(): st.session_state.ui_step = 3
-    nav_buttons(left_label="חזור", right_label="הבא", left_action=back, right_action=next)
-
-# --------------------------------------------------
-# שלב 3 – סדר עדיפויות
-# --------------------------------------------------
-elif st.session_state.ui_step == 3:
-    st.markdown('<div class="step">', unsafe_allow_html=True)
-    st.markdown("### שלב 3: סדר עדיפויות")
-    st.markdown("#### בחר דירוג לכל קטגוריה (1–5)")
-    reliability_weight = st.slider("אמינות", 1, 5, 5)
-    resale_weight = st.slider("שמירת ערך", 1, 5, 3)
-    fuel_weight = st.slider("חיסכון בדלק", 1, 5, 4)
-    performance_weight = st.slider("ביצועים", 1, 5, 2)
-    comfort_weight = st.slider("נוחות", 1, 5, 3)
-    weights = {
-        "reliability": reliability_weight,
-        "resale": resale_weight,
-        "fuel": fuel_weight,
-        "performance": performance_weight,
-        "comfort": comfort_weight,
-    }
-    st.session_state._step3 = dict(weights=weights)
-    st.markdown('</div>', unsafe_allow_html=True)
-    def back(): st.session_state.ui_step = 2
-    def next(): st.session_state.ui_step = 4
-    nav_buttons(left_label="חזור", right_label="הבא", left_action=back, right_action=next)
-
-# --------------------------------------------------
-# שלב 4 – פרטים נוספים
-# --------------------------------------------------
-elif st.session_state.ui_step == 4:
-    st.markdown('<div class="step">', unsafe_allow_html=True)
-    st.markdown("### שלב 4: פרטים נוספים")
-    insurance_history = st.text_input("עבר ביטוחי", value="שנתיים ללא תביעות")
-    violations = st.selectbox("דוחות/שלילות", ["אין", "שלילה בעבר", "נקודות פעילות"])
-    cfam, ccargo, csafety, ctrim = st.columns([1,1,1,1])
-    with cfam: family_size = st.selectbox("גודל משפחה", ["1-2","3-4","5+"])
-    with ccargo: cargo_need = st.selectbox("צורך בתא מטען", ["קטן","בינוני","גדול"])
-    with csafety: safety_required = st.radio("חובה מערכות בטיחות אקטיביות?", ["כן","לא"])
-    with ctrim: trim_level = st.selectbox("רמת אבזור", ["בסיסי","סטנדרטי","עשיר"])
-    consider_supply = st.radio("האם להתחשב בהיצע בשוק?", ["כן","לא"], index=0)
-    cfp, cep = st.columns([1,1])
-    with cfp: fuel_price = st.number_input("מחיר ליטר דלק (₪)", min_value=1.0, max_value=20.0, value=7.0, step=0.1)
-    with cep: electricity_price = st.number_input("מחיר חשמל לקוט״ש (₪)", min_value=0.1, max_value=5.0, value=0.65, step=0.01)
-    st.session_state._step4 = dict(
-        insurance_history=insurance_history, violations=violations,
-        family_size=family_size, cargo_need=cargo_need, safety_required=safety_required,
-        trim_level=trim_level, consider_supply=consider_supply,
-        fuel_price=fuel_price, electricity_price=electricity_price
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
-    def back(): st.session_state.ui_step = 3
-    def next(): st.session_state.ui_step = 5
-    nav_buttons(left_label="חזור", right_label="המשך לייעוץ", left_action=back, right_action=next)
-
-# --------------------------------------------------
-# שלב 5 – ייעוץ ותוצאות
-# --------------------------------------------------
-elif st.session_state.ui_step == 5:
-    st.markdown('<div class="step">', unsafe_allow_html=True)
-    st.markdown("### שלב 5: קבלת ייעוץ ותוצאות")
-
-    s1 = st.session_state._step1
-    s2 = st.session_state._step2
-    s3 = st.session_state._step3
-    s4 = st.session_state._step4
-    if not all([s1, s2, s3, s4]):
-        st.error("חסרים נתונים בשלבים קודמים. חזור אחורה והשלם.")
-    else:
-        # בניית פרופיל (לוגיקה מקורית 1:1)
-        fuels = [fuel_map[f] for f in (s1["fuels_he"] or [])]
-        gears = [gear_map[g] for g in (s1["gears_he"] or [])]
-        turbo_choice = turbo_map[s1["turbo_choice_he"]]
-        weights = s3["weights"]
-
-        profile = make_user_profile(
-            s1["budget_min"], s1["budget_max"], [s1["year_min"], s1["year_max"]],
-            fuels, gears, turbo_choice, s2["main_use"], s2["annual_km"], s2["driver_age"],
-            s4["family_size"], s4["cargo_need"], s4["safety_required"], s4["trim_level"],
-            weights, s2["body_style"], s2["driving_style"], s2["excluded_colors"]
-        )
-        profile["license_years"] = s2["license_years"]
-        profile["driver_gender"] = s2["driver_gender"]
-        profile["insurance_history"] = s4["insurance_history"]
-        profile["violations"] = s4["violations"]
-        profile["consider_market_supply"] = (s4["consider_supply"] == "כן")
-        profile["fuel_price_nis_per_liter"] = s4["fuel_price"]
-        profile["electricity_price_nis_per_kwh"] = s4["electricity_price"]
-        profile["seats"] = s2["seats_choice"]  # מידע בלבד
-
-        st.session_state.user_profile = profile
-        st.session_state.fuel_price = s4["fuel_price"]
-        st.session_state.electricity_price = s4["electricity_price"]
-
-        api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            st.warning("⚠️ לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה.")
-        else:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("models/gemini-2.5-pro")
-
-            if st.button("🚀 בקש המלצות מג׳מיני"):
-                with st.spinner("פונה לג׳מיני..."):
-                    try:
-                        prompt = f"""
+# -------------------------------------------------------------------------------------
+# PROMPTS
+# -------------------------------------------------------------------------------------
+# פרומפט “כלי מקצועי” לג’מיני – EXACTLY לפי הדרישה שלך (כולל הדרישה ל-search_performed=True)
+def build_gemini_prompt(profile: Dict[str, Any]) -> str:
+    return f"""
 Please recommend cars for an Israeli customer. Here is the user profile (JSON):
 {json.dumps(profile, ensure_ascii=False, indent=2)}
 
@@ -364,128 +85,335 @@ Output requirements:
 5) IMPORTANT: All scoring fields must be numbers only (except market_supply which is categorical).
 6) IMPORTANT: Only return car models that are actually sold in Israel.
 """
-                        resp = model.generate_content(prompt)
-                        text = resp.candidates[0].content.parts[0].text.strip()
-                        if text.startswith("```"):
-                            text = text.strip("`").replace("json\n", "").replace("json", "").strip()
-                        try:
-                            parsed = json.loads(text)
-                        except json.JSONDecodeError:
-                            st.error("⚠️ ג׳מיני לא החזיר JSON תקין.")
-                            st.code(text, language="json")
-                            parsed = {}
-                    except Exception as e:
-                        st.error(f"שגיאה בקריאת הפלט מג׳מיני: {e}")
-                        parsed = {}
 
-                if parsed and "recommended_cars" in parsed:
-                    search_performed = parsed.get("search_performed", False)
-                    search_queries = parsed.get("search_queries", [])
-                    st.session_state.search_info = {"search_performed": search_performed, "search_queries": search_queries}
-                    if search_performed and search_queries:
-                        st.info("✅ בוצע חיפוש אינטרנטי לנתוני שוק עדכניים.")
-                    else:
-                        st.warning("⚠️ לא ברור אם בוצע חיפוש חי. ייתכן שהנתונים חלקיים.")
+# פרומפט “משתמש רגיל” ל-GPT – רק הפרופיל + משפט בקשה קצר (לא תנאי מעבדה)
+USER_ONE_LINER = "תמליץ לי 5–10 רכבים על פי הצרכים שצוינו בפרופיל. תן נימוק ברור לכל דגם בעברית."
 
-                    results_df, methods_info = clean_gemini_output(parsed["recommended_cars"])
-                    if not results_df.empty:
-                        # Normalize
-                        results_df = normalize_car_values(results_df)
+# Evaluator: נותן ציון לכל מודל בכל שאלון, ומבקש לעבור גם על הרכבים
+EVAL_PROMPT = """
+דרג שתי תשובות (Gemini JSON ו-GPT Raw/JSON) עבור אותו פרופיל.
+קריטריונים: רלוונטיות לצרכים, עומק והיגיון מקצועי, עקביות, בהירות, תועלת מעשית.
+עבור כל אחת מהתשובות, עבור על רשימת הרכבים והערך כל דגם בקצרה (נימוק תמציתי).
 
-                        if "avg_fuel_consumption" not in results_df.columns:
-                            st.error("חסר שדה avg_fuel_consumption בפלט.")
-                            st.stop()
+החזר JSON בלבד:
+{
+  "gemini_score": 0,          // 0-100
+  "gpt_score": 0,             // 0-100
+  "winner": "Gemini" | "ChatGPT" | "Tie",
+  "reason": "נימוק קצר בעברית",
+  "per_car_review": [         // סקירה לכלי מנצח, דגם-דגם (אם אין, ריק)
+    {
+      "source": "Gemini" | "ChatGPT",
+      "car": "brand model year",
+      "comment": "נימוק קצר בעברית"
+    }
+  ]
+}
+"""
 
-                        # חישובי אנרגיה
-                        is_ev = results_df["fuel"].str.lower().eq("electric")
-                        km_per_liter = results_df["avg_fuel_consumption"].where(~is_ev, np.nan).replace(0, np.nan)
-                        kwh_per_100km = results_df["avg_fuel_consumption"].where(is_ev, np.nan)
-                        annual_km = profile["annual_km"]
-                        fuel_price = st.session_state.fuel_price or 7.0
-                        elec_price = st.session_state.electricity_price or 0.65
-                        fuel_cost = (annual_km / km_per_liter) * fuel_price
-                        elec_cost = (annual_km / 100.0) * kwh_per_100km * elec_price
-                        results_df["annual_energy_cost"] = np.where(is_ev, elec_cost, fuel_cost)
-                        # נשמר לתאימות – לא נציג את annual_fuel_cost באנגלית
-                        results_df["annual_fuel_cost"] = results_df["annual_energy_cost"]
+# -------------------------------------------------------------------------------------
+# PROFILES (50)
+# -------------------------------------------------------------------------------------
+BRANDS = ["Toyota","Mazda","Hyundai","Kia","Honda","Subaru","Skoda","Seat","Volkswagen","Renault","Peugeot","Fiat","Alfa Romeo","BMW","Mercedes","Audi"]
+BODY = ["האצ'בק","סדאן","קרוסאובר","סטיישן","מיני","SUV"]
+ENGINE = ["בנזין","דיזל","היברידי","פלאג-אין","חשמלי"]
+GEAR = ["אוטומט","ידני","DCT/DSG","CVT"]
+PRIMARY = ["אמינות","חיסכון בדלק","נוחות","ביצועים","שמירת ערך","בטיחות"]
 
-                        for col in ["maintenance_cost", "insurance_cost", "annual_fee"]:
-                            if col not in results_df.columns:
-                                results_df[col] = 0.0
+def build_profile(i:int) -> Dict[str,Any]:
+    random.seed(1000+i)
+    return {
+        "profile_id": f"Q{i:02d}",
+        "budget_nis": random.choice([60000, 80000, 100000, 120000, 150000, 180000, 220000]),
+        "driver_age": random.choice([22,26,30,35,40,45,50]),
+        "annual_km": random.choice([8000, 12000, 15000, 20000, 30000]),
+        "family_size": random.choice([1,2,3,4,5]),
+        "primary_use": random.choice([
+            "נסיעות יומיומיות בעיר", "נסיעות בין-עירוניות ארוכות",
+            "טיולים בסופי שבוע", "נסיעות עבודה עם ציוד", "נסיעות לעבודה במרכז"
+        ]),
+        "preferences": {
+            "gearbox": random.choice(GEAR),
+            "engine_type": random.choice(ENGINE),
+            "body_style": random.choice(BODY),
+            "priority_primary": random.choice(PRIMARY),
+            "priority_secondary": random.sample(PRIMARY, k=2),
+            "performance_importance": random.randint(1,5),
+            "comfort_importance": random.randint(1,5),
+            "reliability_importance": random.randint(1,5),
+            "safety_importance": random.randint(1,5)
+        },
+        "must_haves": random.sample(["חיישני חניה","בלימה אוטונומית","בקרת שיוט אדפטיבית","מערכת בטיחות מתקדמת","תא מטען גדול","מסך גדול"], k=3),
+        "nice_to_have": random.sample(["Sunroof","מערכת שמע פרימיום","טעינה אלחוטית","מושבים חשמליים","ג'אנטים"], k=2),
+        "parking": random.choice(["עיר צפופה","פרבר","כפרי"]),
+        "region": random.choice(["מרכז","שפלה","צפון","דרום","ירושלים","חוף"]),
+        "risk_tolerance": random.choice(["נמוכה","בינונית","גבוהה"]),
+        "notes": random.choice([
+            "רוצה רכב חסכוני ואמין", "קודם היה רכב יקר בתחזוקה", "חניה צפופה ליד הבית",
+            "צריך רכב למשפחה עם עגלה", "חשוב שמירת ערך"
+        ])
+    }
 
-                        results_df["total_annual_cost"] = (
-                            results_df["annual_energy_cost"].fillna(0) +
-                            results_df["maintenance_cost"].fillna(0) +
-                            results_df["insurance_cost"].fillna(0) +
-                            results_df["annual_fee"].fillna(0)
-                        )
+PROFILES: List[Dict[str,Any]] = [build_profile(i+1) for i in range(50)]
 
-                        # כותרות צריכה בעברית לפי EV/דלק
-                        if results_df["fuel"].str.lower().eq("electric").any():
-                            column_map_he["avg_fuel_consumption"] = "צריכת חשמל (קוט\"ש/100 ק\"מ)"
-                            column_map_he["annual_energy_cost"] = "עלות חשמל שנתית (₪)"
-                        else:
-                            column_map_he["avg_fuel_consumption"] = "צריכת דלק ממוצעת (ק\"מ/ל')"
-                            column_map_he["annual_energy_cost"] = "עלות דלק שנתית (₪)"
+# -------------------------------------------------------------------------------------
+# UTILS
+# -------------------------------------------------------------------------------------
+def safe_json(text: Optional[str]) -> Dict[str,Any]:
+    if not text:
+        return {}
+    try:
+        fixed = repair_json(text)
+        return json.loads(fixed)
+    except Exception:
+        return {}
 
-                        # טבלת תצוגה בעברית – בלי העמודה האנגלית
-                        results_df_display = results_df.copy()
-                        if "annual_fuel_cost" in results_df_display.columns:
-                            results_df_display = results_df_display.drop(columns=["annual_fuel_cost"])
-                        results_df_display["fuel"] = results_df_display["fuel"].map(fuel_map_he).fillna(results_df_display["fuel"])
-                        results_df_display["gear"] = results_df_display["gear"].map(gear_map_he).fillna(results_df_display["gear"])
-                        results_df_display["turbo"] = results_df_display["turbo"].map(turbo_map_he).fillna(results_df_display["turbo"])
-                        results_df_display = results_df_display.rename(columns=column_map_he)
+def load_list(path:str) -> List[Dict[str,Any]]:
+    if os.path.exists(path):
+        try:
+            with open(path,"r",encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
 
-                        st.session_state.results_df = results_df
-                        st.session_state.methods_info = methods_info
-                        st.success(f"✅ התקבלו {len(results_df)} רכבים מג׳מיני.")
-                    else:
-                        st.error("⚠️ לא נמצאו רכבים בפלט.")
-                else:
-                    st.error("⚠️ לא התקבל מפתח 'recommended_cars' בפלט.")
+def append_item(path:str, item:Dict[str,Any]):
+    data = load_list(path)
+    data.append(item)
+    with open(path,"w",encoding="utf-8") as f:
+        json.dump(data,f,ensure_ascii=False,indent=2)
 
-        # הצגת תוצאות אם קיימות
-        results_df = st.session_state.results_df
-        methods_info = st.session_state.methods_info or []
-        if results_df is not None and not results_df.empty:
-            results_df_display = results_df.copy()
-            # להבטיח שלא מציגים את העמודה האנגלית
-            if "annual_fuel_cost" in results_df_display.columns:
-                results_df_display = results_df_display.drop(columns=["annual_fuel_cost"])
-            results_df_display["fuel"] = results_df_display["fuel"].map(fuel_map_he).fillna(results_df_display["fuel"])
-            results_df_display["gear"] = results_df_display["gear"].map(gear_map_he).fillna(results_df_display["gear"])
-            results_df_display["turbo"] = results_df_display["turbo"].map(turbo_map_he).fillna(results_df_display["turbo"])
-            results_df_display = results_df_display.rename(columns=column_map_he)
+def call_with_retry(fn, retries=3, backoff=1.5):
+    last_err = None
+    for i in range(retries):
+        try:
+            return fn()
+        except Exception as e:
+            last_err = e
+            time.sleep(backoff*(i+1))
+    raise last_err
 
-            st.markdown('<div class="disclaimer">⚠️ הנתונים הם הערכה גסה של AI; יש לאמת לפני קנייה.</div>', unsafe_allow_html=True)
-            st.dataframe(results_df_display.reset_index(drop=True), use_container_width=True)
+# -------------------------------------------------------------------------------------
+# MODEL CALLS
+# -------------------------------------------------------------------------------------
+def call_gemini(profile:Dict[str,Any], timeout=180) -> Dict[str,Any]:
+    prompt = build_gemini_prompt(profile)
+    def _do():
+        resp = gemini.generate_content(prompt, request_options={"timeout": timeout})
+        return safe_json(resp.text)
+    try:
+        return call_with_retry(_do, retries=3)
+    except Exception:
+        return {"_error": "Gemini call failed", "_trace": traceback.format_exc()}
 
-            # גרף עלות כוללת שנתית
-            st.markdown("### 📊 השוואת עלות כוללת שנתית")
-            chart_df = results_df_display[["מותג","דגם","שנה","עלות כוללת שנתית (₪)"]].copy()
-            chart_df["רכב"] = chart_df["מותג"] + " " + chart_df["דגם"] + " " + chart_df["שנה"].astype(str)
-            chart_df = chart_df.set_index("רכב")
-            st.bar_chart(chart_df["עלות כוללת שנתית (₪)"])
+def call_gpt_user(profile:Dict[str,Any], timeout=120) -> Dict[str,Any]:
+    if oa is None:
+        return {"_raw": "OpenAI client unavailable", "_json": {}}
+    def _do():
+        resp = oa.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role":"user","content": json.dumps(profile, ensure_ascii=False)},
+                {"role":"user","content": USER_ONE_LINER}
+            ],
+            temperature=0.6,
+            timeout=timeout
+        )
+        text = resp.choices[0].message.content
+        parsed = safe_json(text)
+        return {"_raw": text, "_json": parsed}
+    try:
+        return call_with_retry(_do, retries=3)
+    except Exception:
+        return {"_raw": "GPT call failed", "_json": {}, "_trace": traceback.format_exc()}
 
-            # הסברים מפורטים בעברית לכל רכב
-            st.markdown("### 📝 הסברים מפורטים לכל רכב")
-            for i, row in results_df_display.iterrows():
-                car_name = f"{row['מותג']} {row['דגם']} {row['שנה']}"
-                with st.expander(f"📝 הסבר מפורט על {car_name}"):
-                    st.caption(f"דלק: {row['דלק']} | תיבה: {row['תיבה']} | טורבו: {row['טורבו']}")
-                    if "טווח מחיר (₪)" in row:
-                        st.write(f"**טווח מחיר:** {row['טווח מחיר (₪)']}")
-                    if "עלות כוללת שנתית (₪)" in row:
-                        st.write(f"**עלות שנתית:** {float(row['עלות כוללת שנתית (₪)']):,.0f} ₪")
-                    method = methods_info[i] if i < len(methods_info) else {}
-                    if method:
-                        for k, v in method.items():
-                            name = method_map_he.get(k, k)
-                            st.write(f"- **{name}:** {v}")
-                    else:
-                        st.write("אין הסברים מפורטים זמינים לפריט זה.")
+def call_evaluator(profile:Dict[str,Any], gem_json:Dict[str,Any], gpt_pack:Dict[str,Any]) -> Dict[str,Any]:
+    if oa is None:
+        return {"gemini_score":0,"gpt_score":0,"winner":"Tie","reason":"Evaluator unavailable","per_car_review":[]}
+    def _do():
+        msgs = [
+            {"role":"system","content":"Hebrew output only. Return JSON only."},
+            {"role":"user","content": f"PROFILE:\n{json.dumps(profile, ensure_ascii=False, indent=2)}"},
+            {"role":"user","content": f"GEMINI_JSON:\n{json.dumps(gem_json, ensure_ascii=False, indent=2)}"},
+            {"role":"user","content": f"GPT_RAW:\n{gpt_pack.get('_raw','')[:4000]}"},
+            {"role":"user","content": f"GPT_JSON:\n{json.dumps(gpt_pack.get('_json',{}), ensure_ascii=False, indent=2)}"},
+            {"role":"user","content": EVAL_PROMPT}
+        ]
+        resp = oa.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=msgs,
+            temperature=0.0
+        )
+        return safe_json(resp.choices[0].message.content)
+    try:
+        return call_with_retry(_do, retries=2)
+    except Exception:
+        return {"gemini_score":0,"gpt_score":0,"winner":"Tie","reason":"Evaluation failed","per_car_review":[]}
 
-    st.markdown('</div>', unsafe_allow_html=True)
-    def back(): st.session_state.ui_step = 4
-    nav_buttons(left_label="חזור", right_label="הבא", left_action=back, right_action=None, show_right=False)
+# -------------------------------------------------------------------------------------
+# TABLE BUILDERS
+# -------------------------------------------------------------------------------------
+def stringify_recs_from_gem(g:Dict[str,Any]) -> str:
+    out=[]
+    for it in (g.get("recommended_cars") or []):
+        car = f"{it.get('brand','')} {it.get('model','')} {it.get('year','')}".strip()
+        why = ""
+        # נעדיף להצמיד את הסיבות מתוך השדות השונים הקיימים
+        if it.get("performance_score") is not None or it.get("suitability") is not None:
+            why = f"(perf {it.get('performance_score','?')}, suit {it.get('suitability','?')})"
+        out.append(f"{car} {why}".strip())
+    return " | ".join(out)
+
+def stringify_recs_from_gptpack(p:Dict[str,Any]) -> str:
+    j = p.get("_json") or {}
+    # ננסה לחלץ שמות מתוך JSON אם קיים; אם לא – נציג raw עד 300 תווים
+    cars=[]
+    if isinstance(j, dict):
+        for k,v in j.items():
+            if isinstance(v, list):
+                for it in v:
+                    if isinstance(it, dict):
+                        car = " ".join([str(it.get(x,"")) for x in ("brand","model","year")]).strip()
+                        if car:
+                            cars.append(car)
+    if cars:
+        return " | ".join(cars)
+    raw = (p.get("_raw") or "").replace("\n"," ")[:300]
+    return raw + ("..." if len(p.get("_raw",""))>300 else "")
+
+def flatten_row(entry:Dict[str,Any]) -> Dict[str,Any]:
+    prof = entry["profile"]
+    gem  = entry["gemini"]
+    gpt  = entry["gpt"]
+    ev   = entry["eval"]
+
+    return {
+        "time": entry["ts"][:19].replace("T"," "),
+        "QID": prof.get("profile_id",""),
+        "תקציב": prof.get("budget_nis",""),
+        "שימוש": prof.get("primary_use",""),
+        "עדיפות": prof.get("preferences",{}).get("priority_primary",""),
+        "דלק": prof.get("preferences",{}).get("engine_type",""),
+        "תיבה": prof.get("preferences",{}).get("gearbox",""),
+        "משפחה": prof.get("family_size",""),
+        # Gemini
+        "Gemini: search_performed": gem.get("search_performed",""),
+        "Gemini: queries": " | ".join(gem.get("search_queries",[]) or []),
+        "Gemini: recs": stringify_recs_from_gem(gem),
+        # GPT
+        "GPT: recs/RAW": stringify_recs_from_gptpack(gpt),
+        # Evaluator
+        "Eval: Gemini score": ev.get("gemini_score",""),
+        "Eval: GPT score": ev.get("gpt_score",""),
+        "Eval: Winner": ev.get("winner",""),
+        "Eval: Reason": ev.get("reason",""),
+    }
+
+# -------------------------------------------------------------------------------------
+# UI
+# -------------------------------------------------------------------------------------
+st.title("🚗 Car Advisor – מבחן אימפקט: כלי מקצועי מול צ'אט")
+st.caption("50 שאלונים אמיתיים (סימולציה) • Gemini (פרומפט מקצועי) מול GPT (משתמש רגיל) • טבלת תוצאות וציון לכל שאלון")
+
+with st.sidebar:
+    st.markdown("### הגדרות הרצה")
+    n = st.slider("מספר שאלונים", 10, 50, 50, step=5)
+    seed = st.number_input("Seed לסדר הרצה", min_value=0, max_value=999999, value=42, step=1)
+    run_btn = st.button("🚀 התחל הרצה רציפה")
+
+prev = load_list(ROWS_PATH)
+st.write(f"📁 רשומות שמורות: {len(prev)}")
+
+status_box = st.empty()
+progress = st.progress(0)
+
+run_rows: List[Dict[str,Any]] = []
+
+if run_btn:
+    random.seed(seed)
+    order = PROFILES[:]
+    random.shuffle(order)
+    order = order[:n]
+
+    for i, prof in enumerate(order, start=1):
+        # GEMINI
+        status_box.info(f"⏳ סטטוס: שאלון {i}/{n} • כלי: Gemini • QID={prof['profile_id']}")
+        with st.spinner(f"Gemini עובד על שאלון {i}/{n}..."):
+            gem_json = call_gemini(prof)
+
+        # GPT (USER)
+        status_box.info(f"⏳ סטטוס: שאלון {i}/{n} • כלי: ChatGPT • QID={prof['profile_id']}")
+        with st.spinner(f"ChatGPT עובד על שאלון {i}/{n}..."):
+            gpt_pack = call_gpt_user(prof)
+
+        # EVALUATOR
+        status_box.info(f"⏳ סטטוס: הערכה • QID={prof['profile_id']}")
+        with st.spinner(f"Evaluator מדרג את התוצאות לשאלון {i}/{n}..."):
+            eval_obj = call_evaluator(prof, gem_json, gpt_pack)
+
+        entry = {
+            "ts": datetime.now().isoformat(),
+            "profile": prof,
+            "gemini": gem_json,
+            "gpt": gpt_pack,
+            "eval": eval_obj
+        }
+        append_item(ROWS_PATH, entry)
+        run_rows.append(entry)
+
+        progress.progress(i / n)
+
+    # SUMMARY
+    winners = {"Gemini":0,"ChatGPT":0,"Tie":0}
+    for r in run_rows:
+        w = r["eval"].get("winner","Tie")
+        winners[w] = winners.get(w,0)+1
+    summary = {
+        "ts": datetime.now().isoformat(),
+        "n": n,
+        "winners": winners,
+        "avg_scores": {
+            "gemini": round(sum(r["eval"].get("gemini_score",0) for r in run_rows)/len(run_rows),2),
+            "gpt": round(sum(r["eval"].get("gpt_score",0) for r in run_rows)/len(run_rows),2),
+        }
+    }
+    append_item(SUMMARY_PATH, summary)
+    status_box.success("✅ הרצה הושלמה. ראה טבלה למטה והורדות.")
+
+# -------------------------------------------------------------------------------------
+# TABLE RENDER + EXPORT
+# -------------------------------------------------------------------------------------
+st.divider()
+st.subheader("📊 טבלת תוצאות – שאלון, המלצות, ציונים ומנצח")
+
+display_rows = run_rows if run_rows else prev
+if display_rows:
+    table = pd.DataFrame([flatten_row(r) for r in display_rows])
+    st.dataframe(table, use_container_width=True)
+
+    # CSV Export
+    table.to_csv(LAST_CSV_PATH, index=False, encoding="utf-8-sig")
+    with open(LAST_CSV_PATH,"rb") as f:
+        st.download_button("⬇️ הורד CSV של הטבלה", f, file_name="ab_results.csv", mime="text/csv")
+
+    # Optional: הצג גם per_car_review אם קיים
+    st.subheader("🔎 פירוט per_car_review (אם קיים מה-Evaluator)")
+    reviews_rows=[]
+    for r in display_rows:
+        ev = r.get("eval",{})
+        for pc in ev.get("per_car_review",[]) or []:
+            reviews_rows.append({
+                "QID": r["profile"].get("profile_id",""),
+                "Source": pc.get("source",""),
+                "Car": pc.get("car",""),
+                "Comment": pc.get("comment","")
+            })
+    if reviews_rows:
+        st.dataframe(pd.DataFrame(reviews_rows), use_container_width=True)
+    else:
+        st.caption("אין פריטי per_car_review להצגה.")
+
+else:
+    st.info("אין נתונים להצגה. הפעל הרצה.")
+
+st.caption("© 2025 Car Advisor – A/B Impact Test. כולל סטטוס חי, Retry, הערכה והורדות CSV/JSON.")
