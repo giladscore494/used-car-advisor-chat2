@@ -341,6 +341,7 @@ Please recommend cars for an Israeli customer. Here is the user profile (JSON):
 {json.dumps(profile, ensure_ascii=False, indent=2)}
 
 Output requirements:
+
 1) Return a SINGLE JSON object with fields: "search_performed", "search_queries", "recommended_cars".
 2) search_performed: ALWAYS return True. You must use live web search (do not return False).
 3) search_queries: ALWAYS return the actual queries you used.
@@ -349,7 +350,9 @@ Output requirements:
    - avg_fuel_consumption (+ fuel_method):
        * for non-EV: km per liter (number only)
        * for EV: kWh per 100 km (number only)
-   - annual_fee (₪ per year, number only) + fee_method
+   - annual_fee (₪ per year, number only) +
+**must return methods only in Hebrew all the methods must return in clean and easy to read in Hebrew.**
+ fee_method
    - reliability_score (1–10, number only) + reliability_method
    - maintenance_cost (₪/year, number only) + maintenance_method
    - safety_rating (1–10, number only) + safety_method
