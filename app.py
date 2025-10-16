@@ -351,7 +351,9 @@ Output requirements:
        * for non-EV: km per liter (number only)
        * for EV: kWh per 100 km (number only)
    - annual_fee (₪ per year, number only) +
-**must return methods only in Hebrew all the methods must return in clean and easy to read in Hebrew.**
+**must return methods only in Hebrew all the methods must return in clean and easy to read
+ in Hebrew.**
+**before you select the chosen cars check very carefully if this specific model sell in israel and got high supply in the market do not return mistakes of models that cannot be found in israel***
  fee_method
    - reliability_score (1–10, number only) + reliability_method
    - maintenance_cost (₪/year, number only) + maintenance_method
