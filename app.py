@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =========================================
 # Car Advisor – גרסה סופית (Modern Blue)
-# שאלון 5 שלבים • הסברים בעברית • ללא תמונות
+# שאלון 5 שלבים • הסברים בעברית • Gemini 3 + Google Search
 # =========================================
 
 import streamlit as st
@@ -9,7 +9,10 @@ import pandas as pd
 import json, os, uuid
 from datetime import datetime
 import numpy as np
-import google.generativeai as genai
+
+# --- Google GenAI (SDK החדש, עם Google Search) ---
+from google import genai
+from google.genai import types as genai_types
 
 # --------------------------------------------------
 # עיצוב כללי
@@ -30,6 +33,23 @@ h1,h2,h3 { color: var(--ink) }
 .topbar { display:flex; align-items:center; gap:10px; }
 </style>
 """, unsafe_allow_html=True)
+
+# --------------------------------------------------
+# Gemini 3 Pro config (SDK החדש)
+# --------------------------------------------------
+GEMINI_MODEL_ID = "gemini-3-pro-preview"
+
+def get_gemini_client():
+    api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return None, "⚠️ לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה."
+    try:
+        client = genai.Client(api_key=api_key)
+        return client, None
+    except Exception as e:
+        return None, f"שגיאה באתחול לקוח Gemini: {e}"
+
+gemini_client, gemini_init_error = get_gemini_client()
 
 # --------------------------------------------------
 # פונקציות עזר (הלוגיקה המקורית נשמרה)
@@ -128,6 +148,101 @@ method_map_he = {
     "resale_method":"שיטת חישוב שמירת ערך","performance_method":"שיטת חישוב ביצועים","comfort_method":"שיטת חישוב נוחות",
     "suitability_method":"שיטת חישוב התאמה","supply_method":"שיטת קביעת היצע"
 }
+
+# --------------------------------------------------
+# Gemini Call – כמו בבנץ' (חיפוש אמיתי)
+# --------------------------------------------------
+def call_gemini_with_search(profile: dict) -> dict:
+    """
+    קריאה ל-Gemini 3 Pro עם Google Search מופעל ו-output כ-JSON בלבד.
+    """
+    if gemini_client is None:
+        return {"_error": gemini_init_error or "Gemini client unavailable."}
+
+    prompt = f"""
+Please recommend cars for an Israeli customer. Here is the user profile (JSON):
+{json.dumps(profile, ensure_ascii=False, indent=2)}
+
+You are an independent automotive data analyst for the **Israeli used car market**.
+
+🔴 CRITICAL INSTRUCTION: USE GOOGLE SEARCH TOOL
+You MUST use the Google Search tool to verify:
+- that the specific model and trim are actually sold in Israel
+- realistic used prices in Israel (NIS)
+- realistic fuel/energy consumption values
+- common issues (DSG, reliability, recalls)
+
+Hard constraints:
+- Return only ONE top-level JSON object.
+- JSON fields: "search_performed", "search_queries", "recommended_cars".
+- search_performed: ALWAYS true (boolean).
+- search_queries: array of the real Hebrew queries you would run in Google (max 6).
+- All numeric fields must be pure numbers (no units, no text).
+
+recommended_cars: array of 5–10 cars. EACH car MUST include:
+  - brand
+  - model
+  - year
+  - fuel
+  - gear
+  - turbo
+  - engine_cc
+  - price_range_nis
+  - avg_fuel_consumption (+ fuel_method):
+      * non-EV: km per liter (number only)
+      * EV: kWh per 100 km (number only)
+  - annual_fee (₪/year, number only) + fee_method
+  - reliability_score (1–10, number only) + reliability_method
+  - maintenance_cost (₪/year, number only) + maintenance_method
+  - safety_rating (1–10, number only) + safety_method
+  - insurance_cost (₪/year, number only) + insurance_method
+  - resale_value (1–10, number only) + resale_method
+  - performance_score (1–10, number only) + performance_method
+  - comfort_features (1–10, number only) + comfort_method
+  - suitability (1–10, number only) + suitability_method
+  - market_supply ("גבוה" / "בינוני" / "נמוך") + supply_method
+  - fit_score (0–100, number only)
+  - comparison_comment (Hebrew)
+  - not_recommended_reason (Hebrew or null)
+
+**All explanation fields (all *_method, comparison_comment, not_recommended_reason) MUST be in clean, easy Hebrew.**
+
+IMPORTANT MARKET REALITY:
+- לפני שאתה בוחר רכבים, תבדוק בזהירות בעזרת החיפוש שדגם כזה אכן נמכר בישראל, בתצורת מנוע וגיר שאתה מציג.
+- אל תמציא דגמים או גרסאות שלא קיימים ביד 2 בישראל.
+- מודלים שלא נמכרו כמעט / אין להם היצע – סמן "market_supply": "נמוך" והסבר בעברית.
+
+Return ONLY raw JSON. Do not add any backticks or explanation text.
+"""
+
+    # Search tool
+    search_tool = genai_types.Tool(
+        google_search=genai_types.GoogleSearch()
+    )
+
+    config = genai_types.GenerateContentConfig(
+        temperature=0.3,
+        top_p=0.9,
+        top_k=40,
+        tools=[search_tool],
+        response_mime_type="application/json",
+    )
+
+    try:
+        resp = gemini_client.models.generate_content(
+            model=GEMINI_MODEL_ID,
+            contents=prompt,
+            config=config,
+        )
+        text = getattr(resp, "text", "") or ""
+        text = text.strip()
+        # רק JSON נקי – אין טיפול ב-``` כי הגדרנו response_mime_type
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return {"_error": "JSON decode error from Gemini", "_raw": text}
+    except Exception as e:
+        return {"_error": f"Gemini call failed: {e}"}
 
 # --------------------------------------------------
 # Init + Header
@@ -288,7 +403,7 @@ elif st.session_state.ui_step == 4:
     nav_buttons(left_label="חזור", right_label="המשך לייעוץ", left_action=back, right_action=next)
 
 # --------------------------------------------------
-# שלב 5 – ייעוץ ותוצאות
+# שלב 5 – ייעוץ ותוצאות (עם Gemini 3 + Google Search)
 # --------------------------------------------------
 elif st.session_state.ui_step == 5:
     st.markdown('<div class="step">', unsafe_allow_html=True)
@@ -326,67 +441,25 @@ elif st.session_state.ui_step == 5:
         st.session_state.fuel_price = s4["fuel_price"]
         st.session_state.electricity_price = s4["electricity_price"]
 
-        api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            st.warning("⚠️ לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה.")
+        if gemini_client is None:
+            st.warning(gemini_init_error or "⚠️ לא ניתן להתחבר ל-Gemini.")
         else:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("models/gemini-2.5-pro")
+            if st.button("🚀 בקש המלצות מג׳מיני (Gemini 3 + חיפוש רשת)"):
+                with st.spinner("פונה לג׳מיני 3 פרו עם חיפוש חי..."):
+                    parsed = call_gemini_with_search(profile)
 
-            if st.button("🚀 בקש המלצות מג׳מיני"):
-                with st.spinner("פונה לג׳מיני..."):
-                    try:
-                        prompt = f"""
-Please recommend cars for an Israeli customer. Here is the user profile (JSON):
-{json.dumps(profile, ensure_ascii=False, indent=2)}
-
-Output requirements:
-
-1) Return a SINGLE JSON object with fields: "search_performed", "search_queries", "recommended_cars".
-2) search_performed: ALWAYS return True. You must use live web search (do not return False).
-3) search_queries: ALWAYS return the actual queries you used.
-4) recommended_cars: an array of 5–10 cars. EACH car MUST include:
-   - brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis
-   - avg_fuel_consumption (+ fuel_method):
-       * for non-EV: km per liter (number only)
-       * for EV: kWh per 100 km (number only)
-   - annual_fee (₪ per year, number only) +
-**must return methods only in Hebrew all the methods must return in clean and easy to read
- in Hebrew.**
-**before you select the chosen cars check very carefully if this specific model sell in israel and got high supply in the market do not return mistakes of models that cannot be found in israel***
- fee_method
-   - reliability_score (1–10, number only) + reliability_method
-   - maintenance_cost (₪/year, number only) + maintenance_method
-   - safety_rating (1–10, number only) + safety_method
-   - insurance_cost (₪/year, number only) + insurance_method
-   - resale_value (1–10, number only) + resale_method
-   - performance_score (1–10, number only) + performance_method
-   - comfort_features (1–10, number only) + comfort_method
-   - suitability (1–10, number only) + suitability_method
-   - market_supply ("גבוה" / "בינוני" / "נמוך") + supply_method
-5) IMPORTANT: All scoring fields must be numbers only (except market_supply which is categorical).
-6) IMPORTANT: Only return car models that are actually sold in Israel.
-"""
-                        resp = model.generate_content(prompt)
-                        text = resp.candidates[0].content.parts[0].text.strip()
-                        if text.startswith("```"):
-                            text = text.strip("`").replace("json\n", "").replace("json", "").strip()
-                        try:
-                            parsed = json.loads(text)
-                        except json.JSONDecodeError:
-                            st.error("⚠️ ג׳מיני לא החזיר JSON תקין.")
-                            st.code(text, language="json")
-                            parsed = {}
-                    except Exception as e:
-                        st.error(f"שגיאה בקריאת הפלט מג׳מיני: {e}")
-                        parsed = {}
-
-                if parsed and "recommended_cars" in parsed:
+                if parsed.get("_error"):
+                    st.error(f"⚠️ שגיאה מג׳מיני: {parsed.get('_error')}")
+                    raw = parsed.get("_raw")
+                    if raw:
+                        st.code(raw, language="json")
+                elif parsed and "recommended_cars" in parsed:
                     search_performed = parsed.get("search_performed", False)
                     search_queries = parsed.get("search_queries", [])
                     st.session_state.search_info = {"search_performed": search_performed, "search_queries": search_queries}
                     if search_performed and search_queries:
-                        st.info("✅ בוצע חיפוש אינטרנטי לנתוני שוק עדכניים.")
+                        st.info(f"✅ בוצע חיפוש אינטרנטי. שאילתות (סה\"כ {len(search_queries)}):")
+                        st.code("\n".join(search_queries))
                     else:
                         st.warning("⚠️ לא ברור אם בוצע חיפוש חי. ייתכן שהנתונים חלקיים.")
 
@@ -406,10 +479,11 @@ Output requirements:
                         annual_km = profile["annual_km"]
                         fuel_price = st.session_state.fuel_price or 7.0
                         elec_price = st.session_state.electricity_price or 0.65
+
                         fuel_cost = (annual_km / km_per_liter) * fuel_price
                         elec_cost = (annual_km / 100.0) * kwh_per_100km * elec_price
                         results_df["annual_energy_cost"] = np.where(is_ev, elec_cost, fuel_cost)
-                        # נשמר לתאימות – לא נציג את annual_fuel_cost באנגלית
+                        # תאימות לעבר – לא מציגים את annual_fuel_cost באנגלית
                         results_df["annual_fuel_cost"] = results_df["annual_energy_cost"]
 
                         for col in ["maintenance_cost", "insurance_cost", "annual_fee"]:
@@ -442,11 +516,11 @@ Output requirements:
 
                         st.session_state.results_df = results_df
                         st.session_state.methods_info = methods_info
-                        st.success(f"✅ התקבלו {len(results_df)} רכבים מג׳מיני.")
+                        st.success(f"✅ התקבלו {len(results_df)} רכבים מג׳מיני 3.")
                     else:
                         st.error("⚠️ לא נמצאו רכבים בפלט.")
                 else:
-                    st.error("⚠️ לא התקבל מפתח 'recommended_cars' בפלט.")
+                    st.error("⚠️ לא התקבל מפתח 'recommended_cars' בפלט מג׳מיני.")
 
         # הצגת תוצאות אם קיימות
         results_df = st.session_state.results_df
@@ -480,7 +554,10 @@ Output requirements:
                     if "טווח מחיר (₪)" in row:
                         st.write(f"**טווח מחיר:** {row['טווח מחיר (₪)']}")
                     if "עלות כוללת שנתית (₪)" in row:
-                        st.write(f"**עלות שנתית:** {float(row['עלות כוללת שנתית (₪)']):,.0f} ₪")
+                        try:
+                            st.write(f"**עלות שנתית:** {float(row['עלות כוללת שנתית (₪)']):,.0f} ₪")
+                        except Exception:
+                            st.write(f"**עלות שנתית:** {row['עלות כוללת שנתית (₪)']} ₪")
                     method = methods_info[i] if i < len(methods_info) else {}
                     if method:
                         for k, v in method.items():
