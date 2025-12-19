@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 # =========================================
 # Car Advisor – Modern Blue
@@ -520,4 +521,175 @@ elif st.session_state.ui_step == 4:
 
     consider_supply = st.radio("האם להתחשב בהיצע בשוק?", ["כן", "לא"], index=0)
 
-    cfp, c
+    cfp, cep = st.columns([1, 1])
+    with cfp:
+        fuel_price = st.number_input("מחיר ליטר דלק (₪)", min_value=1.0, max_value=20.0, value=7.0, step=0.1)
+    with cep:
+        electricity_price = st.number_input("מחיר חשמל לקוט״ש (₪)", min_value=0.1, max_value=5.0, value=0.65, step=0.01)
+
+    st.session_state._step4 = {
+        "insurance_history": insurance_history,
+        "violations": violations,
+        "family_size": family_size,
+        "cargo_need": cargo_need,
+        "safety_required": safety_required,
+        "trim_level": trim_level,
+        "consider_supply": consider_supply,
+        "fuel_price": fuel_price,
+        "electricity_price": electricity_price,
+    }
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    def back():
+        st.session_state.ui_step = 3
+
+    def next_():
+        st.session_state.ui_step = 5
+
+    nav_buttons(left_label="חזור", right_label="המשך לייעוץ", left_action=back, right_action=next_)
+
+# -------------------------
+# Step 5
+# -------------------------
+elif st.session_state.ui_step == 5:
+    st.markdown('<div class="step">', unsafe_allow_html=True)
+    st.markdown("### שלב 5: קבלת ייעוץ ותוצאות")
+
+    s1, s2, s3, s4 = st.session_state._step1, st.session_state._step2, st.session_state._step3, st.session_state._step4
+    if not all([s1, s2, s3, s4]):
+        st.error("חסרים נתונים בשלבים קודמים. חזור אחורה והשלם.")
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        fuels = [fuel_map[f] for f in (s1.get("fuels_he") or [])]
+        gears = [gear_map[g] for g in (s1.get("gears_he") or [])]
+        turbo_choice = turbo_map.get(s1.get("turbo_choice_he", "לא משנה"), "any")
+        weights = (s3.get("weights") or {})
+
+        profile = make_user_profile(
+            s1["budget_min"], s1["budget_max"], [s1["year_min"], s1["year_max"]],
+            fuels, gears, turbo_choice,
+            s2["main_use"], s2["annual_km"], s2["driver_age"],
+            s4["family_size"], s4["cargo_need"], s4["safety_required"],
+            s4["trim_level"], weights,
+            s2["body_style"], s2["driving_style"], s2["excluded_colors"],
+        )
+        profile["license_years"] = s2["license_years"]
+        profile["driver_gender"] = s2["driver_gender"]
+        profile["insurance_history"] = s4["insurance_history"]
+        profile["violations"] = s4["violations"]
+        profile["consider_market_supply"] = (s4["consider_supply"] == "כן")
+        profile["fuel_price_nis_per_liter"] = s4["fuel_price"]
+        profile["electricity_price_nis_per_kwh"] = s4["electricity_price"]
+        profile["seats"] = s2["seats_choice"]
+
+        st.session_state.user_profile = profile
+
+        st.markdown("#### פרופיל שנשלח למודל")
+        st.markdown(
+            f'<div class="codebox">{json.dumps(profile, ensure_ascii=False, indent=2)}</div>',
+            unsafe_allow_html=True,
+        )
+
+        cA, cB = st.columns([1, 1])
+        with cA:
+            run_btn = st.button("🚀 הרץ ייעוץ (Gemini + Search)", use_container_width=True)
+        with cB:
+            back_btn = st.button("⬅️ חזור לשאלון", use_container_width=True)
+
+        if back_btn:
+            st.session_state.ui_step = 4
+            st.rerun()
+
+        if run_btn:
+            if gemini_client is None:
+                st.error(gemini_init_error or "Gemini client unavailable.")
+            else:
+                with st.spinner("מריץ…"):
+                    result = call_gemini_with_search(profile)
+
+                payload = result.get("data") or {}
+                grounding = result.get("grounding") or {}
+                raw_text = result.get("raw_text") or ""
+
+                st.session_state.results_payload = payload
+                st.session_state.search_info = grounding
+                st.session_state.raw_text = raw_text
+
+                st.markdown("---")
+                st.subheader("ולידציה: האם הטול באמת הופעל (מתוך Response)?")
+
+                has_any = bool(grounding.get("has_grounding_metadata")) or bool(grounding.get("sources")) or bool(grounding.get("tool_signals"))
+                if has_any:
+                    st.markdown('<span class="badge-ok">✅ נמצא סימן לשימוש בטול/grounding</span>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<span class="badge-warn">⚠️ אין סימן ברור ב-Response</span>', unsafe_allow_html=True)
+
+                st.write("has_grounding_metadata:", grounding.get("has_grounding_metadata", False))
+                st.write("tool_signals:", grounding.get("tool_signals") or "—")
+
+                if isinstance(payload, dict):
+                    st.write("search_performed (מה-JSON):", payload.get("search_performed", "—"))
+                    st.write("search_queries (מה-JSON):", payload.get("search_queries", "—"))
+
+                sources = grounding.get("sources") or []
+                if sources:
+                    st.markdown("**מקורות (אם הוחזרו):**")
+                    for i, s in enumerate(sources[:10], start=1):
+                        st.write(f"{i}. {s.get('title','').strip()} — {s.get('uri','').strip()}")
+                else:
+                    st.caption("לא הוחזרו מקורות ב-grounding_metadata (תלוי מודל/SDK/הרשאות).")
+
+                st.markdown("---")
+                st.subheader("תוצאות")
+
+                if isinstance(payload, dict) and payload.get("_error"):
+                    st.error(payload.get("_error"))
+                    with st.expander("DEBUG: resp.text גולמי"):
+                        st.markdown(f'<div class="codebox">{raw_text}</div>', unsafe_allow_html=True)
+
+                else:
+                    cars = payload.get("recommended_cars") if isinstance(payload, dict) else None
+                    if not isinstance(cars, list) or not cars:
+                        st.warning("לא התקבל recommended_cars תקין.")
+                        with st.expander("DEBUG: JSON גולמי"):
+                            st.markdown(f'<div class="codebox">{json.dumps(payload, ensure_ascii=False, indent=2)}</div>', unsafe_allow_html=True)
+                    else:
+                        df, methods = clean_gemini_output(cars)
+                        df = normalize_car_values(df)
+
+                        preferred_cols = [
+                            "brand", "model", "year", "fuel", "gear", "turbo",
+                            "price_range_nis", "reliability_score", "resale_value",
+                            "avg_fuel_consumption", "market_supply", "fit_score",
+                        ]
+                        show_cols = [c for c in preferred_cols if c in df.columns] or list(df.columns)
+                        df_show = df[show_cols].copy()
+                        df_show.columns = [column_map_he.get(c, c) for c in df_show.columns]
+
+                        st.dataframe(df_show, use_container_width=True, hide_index=True)
+
+                        st.markdown("### פירוט רכבים")
+                        for idx, row in df.iterrows():
+                            title = f"{row.get('brand','')} {row.get('model','')} {row.get('year','')}"
+                            with st.expander(title, expanded=False):
+                                for col in df.columns:
+                                    if str(col).endswith("_method"):
+                                        continue
+                                    st.write(f"**{column_map_he.get(col, col)}:**", row.get(col, None))
+
+                                st.markdown("#### שיטות חישוב (methods)")
+                                m = methods[idx] if idx < len(methods) else {}
+                                if not m:
+                                    st.caption("אין *_method.")
+                                else:
+                                    for mk, mv in m.items():
+                                        st.write(f"**{method_map_he.get(mk, mk)}:**", mv)
+
+                        with st.expander("DEBUG: JSON גולמי"):
+                            st.markdown(f'<div class="codebox">{json.dumps(payload, ensure_ascii=False, indent=2)}</div>', unsafe_allow_html=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("---")
+st.caption("אם grounding_metadata לא מגיע בכלל — זה בדרך כלל עניין של מודל/SDK/הרשאות. עדיין ייתכן שהיה חיפוש, אבל בלי metadata מפורט.")
