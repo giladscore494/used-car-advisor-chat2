@@ -47,8 +47,8 @@ h1,h2,h3 { color: var(--ink) }
 # --------------------------------------------------
 # Gemini config
 # --------------------------------------------------
-# שים לב: השם חייב להיות בדיוק כפי שה-API שלך מחזיר. אם לא בטוח:
-# השתמש באליאס שיש לך (למשל gemini-flash-latest / gemini-pro-latest)
+# שים לב: השם חייב להיות בדיוק כפי שה-API שלך מחזיר.
+# אם לא בטוח השתמש באליאס שיש לך (gemini-flash-latest / gemini-pro-latest)
 GEMINI_MODEL_ID = "gemini-3-flash-preview"
 
 
@@ -87,7 +87,7 @@ def init_state():
 
 
 # --------------------------------------------------
-# פונקציות עזר (הלוגיקה המקורית נשמרה)
+# פונקציות עזר
 # --------------------------------------------------
 def make_user_profile(
     budget_min,
@@ -226,22 +226,19 @@ method_map_he = {
 
 
 # --------------------------------------------------
-# ✨ השינוי העיקרי: חילוץ Grounding/Tool usage מתוך Response
+# Grounding extraction
 # --------------------------------------------------
 def _safe_to_dict(obj):
-    """מנסה להפוך אובייקטים של SDK לדיקט בצורה סלחנית."""
     if obj is None:
         return None
     if isinstance(obj, dict):
         return obj
-    # pydantic-ish
     for m in ("model_dump", "dict", "to_dict"):
         if hasattr(obj, m):
             try:
                 return getattr(obj, m)()
             except Exception:
                 pass
-    # fallback: __dict__
     try:
         return dict(obj.__dict__)
     except Exception:
@@ -249,23 +246,15 @@ def _safe_to_dict(obj):
 
 
 def extract_grounding_info(resp) -> dict:
-    """
-    מחלץ מידע אינדיקטיבי:
-    - האם יש grounding_metadata
-    - citations/מקורות אם קיימים
-    - סימנים לשימוש בכלי (tool calls) אם קיימים
-    """
     info = {
         "has_grounding_metadata": False,
         "sources": [],
         "tool_signals": [],
         "raw_debug_available": False,
     }
-
     if resp is None:
         return info
 
-    # ננסה להגיע ל-candidate הראשון
     cand = None
     try:
         cands = getattr(resp, "candidates", None)
@@ -274,58 +263,32 @@ def extract_grounding_info(resp) -> dict:
     except Exception:
         cand = None
 
-    # grounding_metadata (מופיע בחלק מהתגובות)
     gm = getattr(cand, "grounding_metadata", None) if cand is not None else getattr(resp, "grounding_metadata", None)
     if gm is not None:
         info["has_grounding_metadata"] = True
-
         gm_dict = _safe_to_dict(gm) or {}
-
-        # הרבה פעמים יש chunks/supports עם URIs
-        # ננסה כמה שמות נפוצים:
-        possible_chunks = (
-            gm_dict.get("grounding_chunks")
-            or gm_dict.get("groundingChunks")
-            or gm_dict.get("chunks")
-            or []
-        )
-        # grounding_chunks יכולים להיות רשימת אובייקטים/דיקטים
+        possible_chunks = gm_dict.get("grounding_chunks") or gm_dict.get("groundingChunks") or gm_dict.get("chunks") or []
         for ch in possible_chunks[:20]:
             chd = _safe_to_dict(ch) or {}
-            # שמות נפוצים בתוך chunk:
-            # - web: {uri, title}
-            # - retrieved_context: {uri, title}
             web = chd.get("web") or chd.get("retrieved_context") or chd.get("retrievedContext") or {}
             webd = _safe_to_dict(web) or {}
-
             uri = webd.get("uri") or webd.get("url") or chd.get("uri") or chd.get("url")
             title = webd.get("title") or chd.get("title")
             if uri or title:
                 info["sources"].append({"title": title or "", "uri": uri or ""})
 
-        # supports לפעמים מכילים grounding citations
-        possible_supports = (
-            gm_dict.get("grounding_supports")
-            or gm_dict.get("groundingSupports")
-            or gm_dict.get("supports")
-            or []
-        )
-        # לא תמיד יש URL שם, אז לא נעמיס
+        possible_supports = gm_dict.get("grounding_supports") or gm_dict.get("groundingSupports") or gm_dict.get("supports") or []
         if possible_supports:
             info["tool_signals"].append(f"grounding_supports={len(possible_supports)}")
 
-    # Tool usage signals: parts/function calls
-    # (לא תמיד זמין, תלוי בגרסת SDK/מודל)
     try:
         if cand is not None:
             content = getattr(cand, "content", None)
             parts = getattr(content, "parts", None) if content is not None else None
             if parts:
                 info["raw_debug_available"] = True
-                # חיפוש "function_call"/"tool" בתוך parts
                 for p in parts:
                     pdict = _safe_to_dict(p) or {}
-                    # שמות נפוצים:
                     if "function_call" in pdict or "functionCall" in pdict:
                         info["tool_signals"].append("function_call_detected")
                     if "tool" in pdict or "tool_code" in pdict or "toolCode" in pdict:
@@ -333,24 +296,14 @@ def extract_grounding_info(resp) -> dict:
     except Exception:
         pass
 
-    # ננקה כפילויות
     info["tool_signals"] = sorted(list(set(info["tool_signals"])))
     return info
 
 
 # --------------------------------------------------
-# Gemini Call – Google Search tool + JSON output
+# Gemini Call
 # --------------------------------------------------
 def call_gemini_with_search(profile: dict) -> dict:
-    """
-    קריאה למודל עם Google Search tool.
-    מחזיר:
-    {
-      "data": <parsed_json_or_error_obj>,
-      "grounding": <extracted_grounding_info>,
-      "raw_text": <resp.text if available>
-    }
-    """
     if gemini_client is None:
         return {"data": {"_error": gemini_init_error or "Gemini client unavailable."}, "grounding": {}, "raw_text": ""}
 
@@ -410,7 +363,6 @@ IMPORTANT MARKET REALITY:
 Return ONLY raw JSON. Do not add any backticks or explanation text.
 """
 
-    # Search tool (grounding)
     search_tool = genai_types.Tool(google_search=genai_types.GoogleSearch())
 
     config = genai_types.GenerateContentConfig(
@@ -429,10 +381,8 @@ Return ONLY raw JSON. Do not add any backticks or explanation text.
         )
 
         raw_text = (getattr(resp, "text", "") or "").strip()
-
         grounding = extract_grounding_info(resp)
 
-        # Parse JSON (expect raw JSON)
         try:
             data = json.loads(raw_text)
         except json.JSONDecodeError:
@@ -445,7 +395,7 @@ Return ONLY raw JSON. Do not add any backticks or explanation text.
 
 
 # --------------------------------------------------
-# Init + Header
+# Header
 # --------------------------------------------------
 def topbar():
     st.markdown(
@@ -469,10 +419,6 @@ for _k in ["_step1", "_step2", "_step3", "_step4"]:
 
 topbar()
 
-
-# --------------------------------------------------
-# ניווט (מזהים ייחודיים כדי למנוע DuplicateKey)
-# --------------------------------------------------
 def nav_buttons(left_label="חזור", right_label="הבא", left_action=None, right_action=None, show_left=True, show_right=True):
     c1, c2 = st.columns([1, 1])
     with c1:
@@ -484,7 +430,7 @@ def nav_buttons(left_label="חזור", right_label="הבא", left_action=None, r
 
 
 # --------------------------------------------------
-# שלב 0 – פתיחה
+# שלב 0
 # --------------------------------------------------
 if st.session_state.ui_step == 0:
     st.markdown('<div class="step">', unsafe_allow_html=True)
@@ -492,7 +438,7 @@ if st.session_state.ui_step == 0:
     st.write("מצא את הרכב המתאים לך בקלות. לחיצה על 'התחל' תוביל אותך לשאלון קצר.")
     if gemini_client is None:
         st.markdown(f'<div class="disclaimer">{gemini_init_error}</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     def go_next():
         st.session_state.ui_step = 1
@@ -501,7 +447,7 @@ if st.session_state.ui_step == 0:
 
 
 # --------------------------------------------------
-# שלב 1 – פרטים בסיסיים
+# שלב 1
 # --------------------------------------------------
 elif st.session_state.ui_step == 1:
     st.markdown('<div class="step">', unsafe_allow_html=True)
@@ -536,8 +482,7 @@ elif st.session_state.ui_step == 1:
         gears_he=gears_he,
         turbo_choice_he=turbo_choice_he,
     )
-
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     def back():
         st.session_state.ui_step = 0
@@ -549,13 +494,59 @@ elif st.session_state.ui_step == 1:
 
 
 # --------------------------------------------------
-# שלב 2 – שימוש וסגנון
+# שלב 2  ✅ כאן התיקון
 # --------------------------------------------------
 elif st.session_state.ui_step == 2:
     st.markdown('<div class="step">', unsafe_allow_html=True)
     st.markdown("### שלב 2: שימוש וסגנון")
+
     c4, c5, c6 = st.columns([2, 1, 1])
     with c4:
         main_use = st.text_area("תיאור הרכב והשימוש בו", value="נסיעה יומיומית לעבודה וטיולים קצרים", height=100)
     with c5:
-        annual_km = st.n
+        # ✅ FIX: במקום st.n
+        annual_km = st.number_input("נסועה שנתית (ק״מ)", min_value=0, step=1000, value=15000)
+    with c6:
+        driver_age = st.number_input("גיל נהג", min_value=16, max_value=100, value=21)
+
+    c6a, c6b = st.columns(2)
+    with c6a:
+        license_years = st.number_input("וותק רישיון (שנים)", min_value=0, max_value=50, value=2)
+    with c6b:
+        driver_gender = st.selectbox("מין נהג", ["זכר", "נקבה"])
+
+    cstyle1, cstyle2, cseats = st.columns([1, 1, 1])
+    with cstyle1:
+        body_style = st.selectbox("סגנון מרכב מועדף", ["כללי", "סדאן", "האצ'בק", "קרוסאובר/ג'יפון"])
+    with cstyle2:
+        driving_style = st.selectbox("סגנון נהיגה", ["רגוע ונינוח", "דינמי וספורטיבי"])
+    with cseats:
+        seats_choice = st.selectbox("מספר מקומות", ["4", "5", "5+"])
+
+    excluded_colors = st.text_input("צבעים לפסילה (מופרדים בפסיק)", value="")
+    excluded_colors = [c.strip() for c in excluded_colors.split(",") if c.strip()]
+
+    st.session_state._step2 = dict(
+        main_use=main_use,
+        annual_km=annual_km,
+        driver_age=driver_age,
+        license_years=license_years,
+        driver_gender=driver_gender,
+        body_style=body_style,
+        driving_style=driving_style,
+        seats_choice=seats_choice,
+        excluded_colors=excluded_colors,
+    )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    def back():
+        st.session_state.ui_step = 1
+
+    def next():
+        st.session_state.ui_step = 3
+
+    nav_buttons(left_label="חזור", right_label="הבא", left_action=back, right_action=next)
+
+
+# -------------------------------------------
