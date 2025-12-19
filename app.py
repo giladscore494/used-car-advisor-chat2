@@ -1,25 +1,23 @@
 # -*- coding: utf-8 -*-
 # =========================================
-# Car Advisor – Modern Blue (Full Single-File)
-# 5-step wizard • Hebrew UI • Gemini + Google Search tool
-# + Validation: extract grounding/tool usage from the RESPONSE (not only prompt)
+# Car Advisor – Modern Blue
+# שאלון 5 שלבים • הסברים בעברית
+# Gemini + Google Search (Grounding)
+# + ולידציה מתוך ה-Response (grounding_metadata / tool signals)
 # =========================================
 
-import os
-import json
-import uuid
+import os, json, uuid
 from datetime import datetime
 
-import numpy as np
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import numpy as np
 
 from google import genai
 from google.genai import types as genai_types
 
-
 # --------------------------------------------------
-# Page + Style
+# UI
 # --------------------------------------------------
 st.set_page_config(page_title="Car Advisor", page_icon="🚗", layout="wide")
 
@@ -52,64 +50,45 @@ hr { border: none; border-top: 1px solid #e5e7eb; margin: 16px 0; }
 # --------------------------------------------------
 GEMINI_MODEL_ID = "gemini-3-flash-preview"
 
-
 def get_gemini_client():
     api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not api_key:
         return None, "⚠️ לא נמצא GEMINI_API_KEY בסודות או במשתני סביבה."
     try:
-        client = genai.Client(api_key=api_key)
-        return client, None
+        return genai.Client(api_key=api_key), None
     except Exception as e:
         return None, f"שגיאה באתחול לקוח Gemini: {e}"
 
-
 gemini_client, gemini_init_error = get_gemini_client()
-
 
 # --------------------------------------------------
 # State
 # --------------------------------------------------
 def init_state():
-    for key in [
-        "user_profile",
-        "validated_cars",
-        "methods_info",
-        "fuel_price",
-        "electricity_price",
-        "ui_step",
-        "results_df",
-        "search_info",
-        "results_payload",
-        "raw_text",
-    ]:
-        if key not in st.session_state:
-            st.session_state[key] = None
-    if st.session_state.ui_step is None:
-        st.session_state.ui_step = 0
-
+    defaults = {
+        "user_profile": None,
+        "results_payload": None,
+        "results_df": None,
+        "methods_info": None,
+        "search_info": None,
+        "raw_text": None,
+        "ui_step": 0,
+        "_step1": None,
+        "_step2": None,
+        "_step3": None,
+        "_step4": None,
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
 # --------------------------------------------------
-# Helpers (your original logic preserved)
+# Helpers
 # --------------------------------------------------
 def make_user_profile(
-    budget_min,
-    budget_max,
-    years_range,
-    fuels,
-    gears,
-    turbo_required,
-    main_use,
-    annual_km,
-    driver_age,
-    family_size,
-    cargo_need,
-    safety_required,
-    trim_level,
-    weights,
-    body_style,
-    driving_style,
-    excluded_colors,
+    budget_min, budget_max, years_range, fuels, gears, turbo_required,
+    main_use, annual_km, driver_age, family_size, cargo_need, safety_required,
+    trim_level, weights, body_style, driving_style, excluded_colors,
 ):
     return {
         "budget_nis": [float(budget_min), float(budget_max)],
@@ -130,101 +109,70 @@ def make_user_profile(
         "excluded_colors": excluded_colors,
     }
 
-
 def clean_gemini_output(cars_raw):
     records, methods = [], []
     for car in cars_raw:
         if not isinstance(car, dict):
             continue
-        record, method = {}, {}
+        rec, met = {}, {}
         for k, v in car.items():
             if str(k).endswith("_method"):
-                method[k] = v
+                met[k] = v
             else:
-                record[k] = v
-        records.append(record)
-        methods.append(method)
+                rec[k] = v
+        records.append(rec)
+        methods.append(met)
     return pd.DataFrame(records), methods
-
 
 def normalize_car_values(df):
     if "fuel" in df.columns:
-        df["fuel"] = df["fuel"].replace(
-            {
-                "בנזין": "gasoline",
-                "דיזל": "diesel",
-                "היברידי": "hybrid",
-                "דיזל היברידי": "hybrid-diesel",
-                "חשמלי": "electric",
-            }
-        )
+        df["fuel"] = df["fuel"].replace({
+            "בנזין": "gasoline",
+            "דיזל": "diesel",
+            "היברידי": "hybrid",
+            "דיזל היברידי": "hybrid-diesel",
+            "חשמלי": "electric",
+        })
     if "gear" in df.columns:
-        df["gear"] = df["gear"].replace(
-            {
-                "אוטומטי": "automatic",
-                "אוטומטית": "automatic",
-                "אוטומטי (DSG7)": "automatic",
-                "אוטומטי (TCT)": "automatic",
-                "אוטומטי (רובוטי)": "automatic",
-                "ידני": "manual",
-                "ידנית": "manual",
-            }
-        )
+        df["gear"] = df["gear"].replace({
+            "אוטומטי": "automatic",
+            "אוטומטית": "automatic",
+            "אוטומטי (DSG7)": "automatic",
+            "אוטומטי (TCT)": "automatic",
+            "אוטומטי (רובוטי)": "automatic",
+            "ידני": "manual",
+            "ידנית": "manual",
+        })
     if "turbo" in df.columns:
         df["turbo"] = df["turbo"].replace({"כן": True, "לא": False, True: True, False: False})
     return df
 
-
 # --------------------------------------------------
-# Mappings
+# Maps
 # --------------------------------------------------
 fuel_map = {"בנזין": "gasoline", "היברידי": "hybrid", "דיזל היברידי": "hybrid-diesel", "דיזל": "diesel", "חשמלי": "electric"}
 gear_map = {"אוטומטית": "automatic", "ידנית": "manual"}
 turbo_map = {"לא משנה": "any", "כן": "yes", "לא": "no"}
 
 column_map_he = {
-    "brand": "מותג",
-    "model": "דגם",
-    "year": "שנה",
-    "fuel": "דלק",
-    "gear": "תיבה",
-    "turbo": "טורבו",
-    "engine_cc": 'נפח מנוע (סמ"ק)',
-    "price_range_nis": "טווח מחיר (₪)",
-    "avg_fuel_consumption": "צריכת דלק/אנרגיה",
-    "annual_fee": "אגרה שנתית (₪)",
-    "reliability_score": "אמינות",
-    "maintenance_cost": "עלות אחזקה (₪/שנה)",
-    "safety_rating": "בטיחות",
-    "insurance_cost": "עלות ביטוח (₪/שנה)",
-    "resale_value": "שמירת ערך",
-    "performance_score": "ביצועים",
-    "comfort_features": "נוחות",
-    "suitability": "התאמה",
-    "market_supply": "היצע בשוק",
-    "fit_score": "ציון התאמה (0–100)",
-    "comparison_comment": "הערה השוואתית",
-    "not_recommended_reason": "למה לא מומלץ",
+    "brand":"מותג","model":"דגם","year":"שנה","fuel":"דלק","gear":"תיבה","turbo":"טורבו","engine_cc":"נפח מנוע (סמ\"ק)",
+    "price_range_nis":"טווח מחיר (₪)","avg_fuel_consumption":"צריכת דלק/אנרגיה","annual_fee":"אגרה שנתית (₪)",
+    "reliability_score":"אמינות","maintenance_cost":"עלות אחזקה (₪/שנה)","safety_rating":"בטיחות",
+    "insurance_cost":"עלות ביטוח (₪/שנה)","resale_value":"שמירת ערך","performance_score":"ביצועים",
+    "comfort_features":"נוחות","suitability":"התאמה","market_supply":"היצע בשוק","fit_score":"ציון התאמה (0–100)",
+    "comparison_comment":"הערה השוואתית","not_recommended_reason":"למה לא מומלץ",
 }
 
 method_map_he = {
-    "fuel_method": "שיטת חישוב צריכת דלק/חשמל",
-    "fee_method": "שיטת חישוב אגרה",
-    "reliability_method": "שיטת חישוב אמינות",
-    "maintenance_method": "שיטת חישוב עלות אחזקה",
-    "safety_method": "שיטת חישוב בטיחות",
-    "insurance_method": "שיטת חישוב ביטוח",
-    "resale_method": "שיטת חישוב שמירת ערך",
-    "performance_method": "שיטת חישוב ביצועים",
-    "comfort_method": "שיטת חישוב נוחות",
-    "suitability_method": "שיטת חישוב התאמה",
-    "supply_method": "שיטת קביעת היצע",
+    "fuel_method":"שיטת חישוב צריכת דלק/חשמל","fee_method":"שיטת חישוב אגרה","reliability_method":"שיטת חישוב אמינות",
+    "maintenance_method":"שיטת חישוב עלות אחזקה","safety_method":"שיטת חישוב בטיחות","insurance_method":"שיטת חישוב ביטוח",
+    "resale_method":"שיטת חישוב שמירת ערך","performance_method":"שיטת חישוב ביצועים","comfort_method":"שיטת חישוב נוחות",
+    "suitability_method":"שיטת חישוב התאמה","supply_method":"שיטת קביעת היצע",
 }
 
-
-# ==================================================
-# ✅ NEW: Extract grounding/tool usage from RESPONSE
-# ==================================================
+# --------------------------------------------------
+# Grounding extraction (best-effort)
+# --------------------------------------------------
 def _safe_to_dict(obj):
     if obj is None:
         return None
@@ -241,31 +189,19 @@ def _safe_to_dict(obj):
     except Exception:
         return None
 
-
 def extract_grounding_info(resp) -> dict:
-    """
-    Tries to infer tool usage from the SDK response:
-    - grounding_metadata existence
-    - sources (uri/title) if present
-    - tool signals from parts if present
-    """
-    info = {
-        "has_grounding_metadata": False,
-        "sources": [],
-        "tool_signals": [],
-    }
+    info = {"has_grounding_metadata": False, "sources": [], "tool_signals": []}
     if resp is None:
         return info
 
     cand = None
     try:
         cands = getattr(resp, "candidates", None)
-        if cands and len(cands) > 0:
+        if cands:
             cand = cands[0]
     except Exception:
         cand = None
 
-    # grounding_metadata
     gm = None
     try:
         gm = getattr(cand, "grounding_metadata", None) if cand is not None else getattr(resp, "grounding_metadata", None)
@@ -290,7 +226,7 @@ def extract_grounding_info(resp) -> dict:
         if supports:
             info["tool_signals"].append(f"grounding_supports={len(supports)}")
 
-    # parts-based signals
+    # parts-based signals (optional)
     try:
         if cand is not None:
             content = getattr(cand, "content", None)
@@ -305,22 +241,13 @@ def extract_grounding_info(resp) -> dict:
     except Exception:
         pass
 
-    info["tool_signals"] = sorted(list(set(info["tool_signals"])))
+    info["tool_signals"] = sorted(set(info["tool_signals"]))
     return info
 
-
 # --------------------------------------------------
-# Gemini call (Google Search tool + JSON + grounding validation)
+# Gemini call (Google Search tool + JSON output)
 # --------------------------------------------------
 def call_gemini_with_search(profile: dict) -> dict:
-    """
-    Returns:
-    {
-      "data": parsed_json_or_error,
-      "grounding": extracted_info,
-      "raw_text": resp.text
-    }
-    """
     if gemini_client is None:
         return {"data": {"_error": gemini_init_error or "Gemini client unavailable."}, "grounding": {}, "raw_text": ""}
 
@@ -328,60 +255,38 @@ def call_gemini_with_search(profile: dict) -> dict:
 Please recommend cars for an Israeli customer. Here is the user profile (JSON):
 {json.dumps(profile, ensure_ascii=False, indent=2)}
 
-You are an independent automotive data analyst for the **Israeli used car market**.
+You are an independent automotive data analyst for the Israeli used car market.
 
-🔴 CRITICAL INSTRUCTION: USE GOOGLE SEARCH TOOL
-You MUST use the Google Search tool to verify:
-- that the specific model and trim are actually sold in Israel
-- realistic used prices in Israel (NIS)
-- realistic fuel/energy consumption values
-- common issues (DSG, reliability, recalls)
+CRITICAL: USE GOOGLE SEARCH TOOL to verify Israel availability, realistic prices, fuel consumption, and common issues.
 
 Hard constraints:
 - Return only ONE top-level JSON object.
 - JSON fields: "search_performed", "search_queries", "recommended_cars".
 - search_performed: ALWAYS true (boolean).
-- search_queries: array of the real Hebrew queries you would run in Google (max 6).
-- All numeric fields must be pure numbers (no units, no text).
+- search_queries: array of real Hebrew queries you ran/would run (max 6).
+- All numeric fields must be pure numbers.
 
 recommended_cars: array of 5–10 cars. EACH car MUST include:
-  - brand
-  - model
-  - year
-  - fuel
-  - gear
-  - turbo
-  - engine_cc
-  - price_range_nis
-  - avg_fuel_consumption (+ fuel_method):
-      * non-EV: km per liter (number only)
-      * EV: kWh per 100 km (number only)
-  - annual_fee (number only) + fee_method
-  - reliability_score (1–10, number only) + reliability_method
-  - maintenance_cost (number only) + maintenance_method
-  - safety_rating (1–10, number only) + safety_method
-  - insurance_cost (number only) + insurance_method
-  - resale_value (1–10, number only) + resale_method
-  - performance_score (1–10, number only) + performance_method
-  - comfort_features (1–10, number only) + comfort_method
-  - suitability (1–10, number only) + suitability_method
-  - market_supply ("גבוה" / "בינוני" / "נמוך") + supply_method
-  - fit_score (0–100, number only)
-  - comparison_comment (Hebrew)
-  - not_recommended_reason (Hebrew or null)
+brand, model, year, fuel, gear, turbo, engine_cc, price_range_nis,
+avg_fuel_consumption + fuel_method,
+annual_fee + fee_method,
+reliability_score + reliability_method,
+maintenance_cost + maintenance_method,
+safety_rating + safety_method,
+insurance_cost + insurance_method,
+resale_value + resale_method,
+performance_score + performance_method,
+comfort_features + comfort_method,
+suitability + suitability_method,
+market_supply ("גבוה"/"בינוני"/"נמוך") + supply_method,
+fit_score (0-100),
+comparison_comment (Hebrew),
+not_recommended_reason (Hebrew or null).
 
-**All explanation fields (all *_method, comparison_comment, not_recommended_reason) MUST be in clean, easy Hebrew.**
-
-IMPORTANT MARKET REALITY:
-- לפני שאתה בוחר רכבים, תבדוק בזהירות בעזרת החיפוש שדגם כזה אכן נמכר בישראל, בתצורת מנוע וגיר שאתה מציג.
-- אל תמציא דגמים או גרסאות שלא קיימים ביד 2 בישראל.
-- מודלים שלא נמכרו כמעט / אין להם היצע – סמן "market_supply": "נמוך" והסבר בעברית.
-
-Return ONLY raw JSON. Do not add any backticks or explanation text.
+Return ONLY raw JSON.
 """
 
     search_tool = genai_types.Tool(google_search=genai_types.GoogleSearch())
-
     config = genai_types.GenerateContentConfig(
         temperature=0.3,
         top_p=0.9,
@@ -396,7 +301,6 @@ Return ONLY raw JSON. Do not add any backticks or explanation text.
             contents=prompt,
             config=config,
         )
-
         raw_text = (getattr(resp, "text", "") or "").strip()
         grounding = extract_grounding_info(resp)
 
@@ -410,9 +314,8 @@ Return ONLY raw JSON. Do not add any backticks or explanation text.
     except Exception as e:
         return {"data": {"_error": f"Gemini call failed: {e}"}, "grounding": {}, "raw_text": ""}
 
-
 # --------------------------------------------------
-# Header / Topbar
+# Layout helpers
 # --------------------------------------------------
 def topbar():
     st.markdown(
@@ -428,18 +331,7 @@ def topbar():
     )
     st.markdown("---")
 
-
-# --------------------------------------------------
-# Navigation buttons
-# --------------------------------------------------
-def nav_buttons(
-    left_label="חזור",
-    right_label="הבא",
-    left_action=None,
-    right_action=None,
-    show_left=True,
-    show_right=True,
-):
+def nav_buttons(left_label="חזור", right_label="הבא", left_action=None, right_action=None, show_left=True, show_right=True):
     c1, c2 = st.columns([1, 1])
     with c1:
         if show_left:
@@ -448,20 +340,15 @@ def nav_buttons(
         if show_right:
             st.button(right_label, on_click=right_action, key=f"next_{st.session_state.ui_step}_{uuid.uuid4().hex}")
 
-
 # --------------------------------------------------
-# Init
+# Run app
 # --------------------------------------------------
 init_state()
-for _k in ["_step1", "_step2", "_step3", "_step4"]:
-    if _k not in st.session_state:
-        st.session_state[_k] = None
-
 topbar()
 
-# --------------------------------------------------
+# -------------------------
 # Step 0
-# --------------------------------------------------
+# -------------------------
 if st.session_state.ui_step == 0:
     st.markdown('<div class="step">', unsafe_allow_html=True)
     st.subheader("ברוך הבא ל-Car Advisor")
@@ -475,9 +362,9 @@ if st.session_state.ui_step == 0:
 
     nav_buttons(show_left=False, right_label="התחל", right_action=go_next)
 
-# --------------------------------------------------
-# Step 1 – Basic
-# --------------------------------------------------
+# -------------------------
+# Step 1
+# -------------------------
 elif st.session_state.ui_step == 1:
     st.markdown('<div class="step">', unsafe_allow_html=True)
     st.markdown("### שלב 1: פרטים בסיסיים")
@@ -503,29 +390,29 @@ elif st.session_state.ui_step == 1:
 
     turbo_choice_he = st.selectbox("טורבו?", list(turbo_map.keys()), index=1)
 
-    st.session_state._step1 = dict(
-        budget_min=budget_min,
-        budget_max=budget_max,
-        year_min=year_min,
-        year_max=year_max,
-        fuels_he=fuels_he,
-        gears_he=gears_he,
-        turbo_choice_he=turbo_choice_he,
-    )
+    st.session_state._step1 = {
+        "budget_min": budget_min,
+        "budget_max": budget_max,
+        "year_min": year_min,
+        "year_max": year_max,
+        "fuels_he": fuels_he,
+        "gears_he": gears_he,
+        "turbo_choice_he": turbo_choice_he,
+    }
 
     st.markdown("</div>", unsafe_allow_html=True)
 
     def back():
         st.session_state.ui_step = 0
 
-    def next():
+    def next_():
         st.session_state.ui_step = 2
 
-    nav_buttons(left_label="חזור", right_label="הבא", left_action=back, right_action=next)
+    nav_buttons(left_label="חזור", right_label="הבא", left_action=back, right_action=next_)
 
-# --------------------------------------------------
-# Step 2 – Use & Style
-# --------------------------------------------------
+# -------------------------
+# Step 2
+# -------------------------
 elif st.session_state.ui_step == 2:
     st.markdown('<div class="step">', unsafe_allow_html=True)
     st.markdown("### שלב 2: שימוש וסגנון")
@@ -555,13 +442,82 @@ elif st.session_state.ui_step == 2:
     excluded_colors_raw = st.text_input("צבעים לפסילה (מופרדים בפסיק)", value="")
     excluded_colors = [c.strip() for c in excluded_colors_raw.split(",") if c.strip()]
 
-    st.session_state._step2 = dict(
-        main_use=main_use,
-        annual_km=annual_km,
-        driver_age=driver_age,
-        license_years=license_years,
-        driver_gender=driver_gender,
-        body_style=body_style,
-        driving_style=driving_style,
-        seats_choice=seats_choice,
-        excluded_
+    st.session_state._step2 = {
+        "main_use": main_use,
+        "annual_km": annual_km,
+        "driver_age": driver_age,
+        "license_years": license_years,
+        "driver_gender": driver_gender,
+        "body_style": body_style,
+        "driving_style": driving_style,
+        "seats_choice": seats_choice,
+        "excluded_colors": excluded_colors,
+    }
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    def back():
+        st.session_state.ui_step = 1
+
+    def next_():
+        st.session_state.ui_step = 3
+
+    nav_buttons(left_label="חזור", right_label="הבא", left_action=back, right_action=next_)
+
+# -------------------------
+# Step 3
+# -------------------------
+elif st.session_state.ui_step == 3:
+    st.markdown('<div class="step">', unsafe_allow_html=True)
+    st.markdown("### שלב 3: סדר עדיפויות")
+    st.markdown("#### בחר דירוג לכל קטגוריה (1–5)")
+
+    reliability_weight = st.slider("אמינות", 1, 5, 5)
+    resale_weight = st.slider("שמירת ערך", 1, 5, 3)
+    fuel_weight = st.slider("חיסכון בדלק", 1, 5, 4)
+    performance_weight = st.slider("ביצועים", 1, 5, 2)
+    comfort_weight = st.slider("נוחות", 1, 5, 3)
+
+    st.session_state._step3 = {
+        "weights": {
+            "reliability": reliability_weight,
+            "resale": resale_weight,
+            "fuel": fuel_weight,
+            "performance": performance_weight,
+            "comfort": comfort_weight,
+        }
+    }
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    def back():
+        st.session_state.ui_step = 2
+
+    def next_():
+        st.session_state.ui_step = 4
+
+    nav_buttons(left_label="חזור", right_label="הבא", left_action=back, right_action=next_)
+
+# -------------------------
+# Step 4
+# -------------------------
+elif st.session_state.ui_step == 4:
+    st.markdown('<div class="step">', unsafe_allow_html=True)
+    st.markdown("### שלב 4: פרטים נוספים")
+
+    insurance_history = st.text_input("עבר ביטוחי", value="שנתיים ללא תביעות")
+    violations = st.selectbox("דוחות/שלילות", ["אין", "שלילה בעבר", "נקודות פעילות"])
+
+    cfam, ccargo, csafety, ctrim = st.columns([1, 1, 1, 1])
+    with cfam:
+        family_size = st.selectbox("גודל משפחה", ["1-2", "3-4", "5+"])
+    with ccargo:
+        cargo_need = st.selectbox("צורך בתא מטען", ["קטן", "בינוני", "גדול"])
+    with csafety:
+        safety_required = st.radio("חובה מערכות בטיחות אקטיביות?", ["כן", "לא"])
+    with ctrim:
+        trim_level = st.selectbox("רמת אבזור", ["בסיסי", "סטנדרטי", "עשיר"])
+
+    consider_supply = st.radio("האם להתחשב בהיצע בשוק?", ["כן", "לא"], index=0)
+
+    cfp, c
