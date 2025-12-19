@@ -37,7 +37,7 @@ h1,h2,h3 { color: var(--ink) }
 # --------------------------------------------------
 # Gemini 3 Pro config (SDK החדש)
 # --------------------------------------------------
-GEMINI_MODEL_ID = "gemini-3-pro-preview"
+GEMINI_MODEL_ID = "gemini-3-flash-preview"
 
 def get_gemini_client():
     api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
