@@ -7,7 +7,7 @@
 
 import streamlit as st
 import pandas as pd
-import json, os, uuid
+import json, os, uuid, re, logging
 from datetime import datetime
 import numpy as np
 
@@ -18,10 +18,8 @@ from google.genai import types as genai_types
 # --- Israeli Car Market Data ---
 try:
     from car_models_dict import israeli_car_market_full_compilation
-    import logging
     logging.info(f"[CAR_DICT] ✅ Loaded {len(israeli_car_market_full_compilation)} manufacturers")
 except Exception as e:
-    import logging
     logging.warning(f"[CAR_DICT] ⚠️ Failed to load car_models_dict: {e}")
     israeli_car_market_full_compilation = {}
 
@@ -191,7 +189,6 @@ def validate_car_in_israeli_market(brand: str, model: str) -> tuple[bool, str]:
         # Extract model name without year range
         # Assume year range is always at the end in format (YYYY-YYYY) or (YYYY)
         # This is safer than just splitting on first '(' which could be in model name
-        import re
         match = re.match(r'^(.+?)\s*\((\d{4}(?:-\d{4})?)\)$', db_model.strip())
         if match:
             db_model_name = match.group(1).strip().lower()
