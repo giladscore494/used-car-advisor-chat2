@@ -18,9 +18,11 @@ from google.genai import types as genai_types
 # --- Israeli Car Market Data ---
 try:
     from car_models_dict import israeli_car_market_full_compilation
-    print(f"[CAR_DICT] ✅ Loaded {len(israeli_car_market_full_compilation)} manufacturers")
+    import logging
+    logging.info(f"[CAR_DICT] ✅ Loaded {len(israeli_car_market_full_compilation)} manufacturers")
 except Exception as e:
-    print(f"[CAR_DICT] ⚠️ Failed to load car_models_dict: {e}")
+    import logging
+    logging.warning(f"[CAR_DICT] ⚠️ Failed to load car_models_dict: {e}")
     israeli_car_market_full_compilation = {}
 
 # --------------------------------------------------
@@ -143,8 +145,11 @@ _brand_lookup_cache = None
 def _get_brand_lookup_cache():
     """
     Get or create cached brand lookup dictionary.
-    Note: In Streamlit, this is safe as each session runs in a single thread.
-    For multi-threaded applications, consider using threading.Lock.
+    
+    Note: This cache is per-process (shared across all Streamlit sessions/users).
+    In Streamlit's execution model, each session runs in a single thread but
+    shares the Python process, so this cache benefits all users simultaneously.
+    For multi-threaded applications outside Streamlit, use threading.Lock.
     """
     global _brand_lookup_cache
     if _brand_lookup_cache is None and israeli_car_market_full_compilation:
@@ -160,8 +165,9 @@ def validate_car_in_israeli_market(brand: str, model: str) -> tuple[bool, str]:
     Returns: (is_valid, message)
     """
     if not israeli_car_market_full_compilation:
-        # If dictionary not loaded, skip validation
-        return True, ""
+        # If dictionary not loaded, return neutral status (not validated, not failed)
+        # This is logged at startup, so we don't repeat the warning
+        return True, "⚠️ לא ניתן לאמת - מאגר לא נטען"
     
     # Normalize inputs
     brand_normalized = brand.strip().lower()
@@ -183,7 +189,15 @@ def validate_car_in_israeli_market(brand: str, model: str) -> tuple[bool, str]:
     
     for db_model in models_list:
         # Extract model name without year range
-        db_model_name = db_model.split('(')[0].strip().lower()
+        # Assume year range is always at the end in format (YYYY-YYYY) or (YYYY)
+        # This is safer than just splitting on first '(' which could be in model name
+        import re
+        match = re.match(r'^(.+?)\s*\((\d{4}(?:-\d{4})?)\)$', db_model.strip())
+        if match:
+            db_model_name = match.group(1).strip().lower()
+        else:
+            # Fallback to old method if format doesn't match
+            db_model_name = db_model.split('(')[0].strip().lower()
         
         # Improved matching logic:
         # 1. Exact match
