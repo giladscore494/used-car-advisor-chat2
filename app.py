@@ -61,6 +61,12 @@ def get_gemini_client():
 gemini_client, gemini_init_error = get_gemini_client()
 
 # --------------------------------------------------
+# Validation Constants
+# --------------------------------------------------
+MIN_MODEL_NAME_LENGTH = 2  # Minimum characters for model name validation
+SAMPLE_BRANDS_COUNT = 10   # Number of brands to show in AI prompt sample
+
+# --------------------------------------------------
 # פונקציות עזר (הלוגיקה המקורית נשמרה)
 # --------------------------------------------------
 def init_state():
@@ -135,7 +141,11 @@ def normalize_car_values(df):
 _brand_lookup_cache = None
 
 def _get_brand_lookup_cache():
-    """Get or create cached brand lookup dictionary"""
+    """
+    Get or create cached brand lookup dictionary.
+    Note: In Streamlit, this is safe as each session runs in a single thread.
+    For multi-threaded applications, consider using threading.Lock.
+    """
     global _brand_lookup_cache
     if _brand_lookup_cache is None and israeli_car_market_full_compilation:
         _brand_lookup_cache = {
@@ -158,7 +168,7 @@ def validate_car_in_israeli_market(brand: str, model: str) -> tuple[bool, str]:
     model_normalized = model.strip().lower()
     
     # Minimum length check to avoid false positives
-    if len(model_normalized) < 2:
+    if len(model_normalized) < MIN_MODEL_NAME_LENGTH:
         return False, f"⚠️ שם דגם קצר מדי: '{model}'"
     
     # Use cached brand lookup for performance
@@ -251,13 +261,14 @@ def call_gemini_with_search(profile: dict) -> dict:
     # Prepare Israeli market models reference
     market_models_sample = ""
     if israeli_car_market_full_compilation:
-        # Show top 10 manufacturers with their model count as reference
-        top_brands = list(israeli_car_market_full_compilation.keys())[:10]
+        # Show top manufacturers with their model count as reference
+        top_brands = list(israeli_car_market_full_compilation.keys())[:SAMPLE_BRANDS_COUNT]
         market_models_sample = "\n".join([
             f"  - {brand}: {len(israeli_car_market_full_compilation[brand])} models"
             for brand in top_brands
         ])
-        market_models_sample = f"\n\nISRAELI MARKET MODELS REFERENCE (sample):\n{market_models_sample}\n... and {len(israeli_car_market_full_compilation) - 10} more manufacturers"
+        remaining_count = len(israeli_car_market_full_compilation) - SAMPLE_BRANDS_COUNT
+        market_models_sample = f"\n\nISRAELI MARKET MODELS REFERENCE (sample):\n{market_models_sample}\n... and {remaining_count} more manufacturers"
 
     prompt = f"""
 Please recommend cars for an Israeli customer. Here is the user profile (JSON):
