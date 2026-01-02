@@ -131,6 +131,19 @@ def normalize_car_values(df):
         df["turbo"] = df["turbo"].replace({"כן": True, "לא": False, True: True, False: False})
     return df
 
+# Create brand lookup cache for performance
+_brand_lookup_cache = None
+
+def _get_brand_lookup_cache():
+    """Get or create cached brand lookup dictionary"""
+    global _brand_lookup_cache
+    if _brand_lookup_cache is None and israeli_car_market_full_compilation:
+        _brand_lookup_cache = {
+            brand.lower(): brand 
+            for brand in israeli_car_market_full_compilation.keys()
+        }
+    return _brand_lookup_cache or {}
+
 def validate_car_in_israeli_market(brand: str, model: str) -> tuple[bool, str]:
     """
     Validate if a car model exists in the Israeli market database.
@@ -140,27 +153,45 @@ def validate_car_in_israeli_market(brand: str, model: str) -> tuple[bool, str]:
         # If dictionary not loaded, skip validation
         return True, ""
     
-    # Normalize brand name for case-insensitive matching
+    # Normalize inputs
     brand_normalized = brand.strip().lower()
+    model_normalized = model.strip().lower()
     
-    # Find matching brand
-    matching_brand = None
-    for db_brand in israeli_car_market_full_compilation.keys():
-        if db_brand.lower() == brand_normalized:
-            matching_brand = db_brand
-            break
+    # Minimum length check to avoid false positives
+    if len(model_normalized) < 2:
+        return False, f"⚠️ שם דגם קצר מדי: '{model}'"
+    
+    # Use cached brand lookup for performance
+    brand_cache = _get_brand_lookup_cache()
+    matching_brand = brand_cache.get(brand_normalized)
     
     if not matching_brand:
         return False, f"⚠️ מותג '{brand}' לא נמצא במאגר הישראלי"
     
-    # Check if model exists (basic substring matching)
-    model_normalized = model.strip().lower()
+    # Check if model exists with improved matching
     models_list = israeli_car_market_full_compilation[matching_brand]
     
     for db_model in models_list:
         # Extract model name without year range
         db_model_name = db_model.split('(')[0].strip().lower()
-        if model_normalized in db_model_name or db_model_name in model_normalized:
+        
+        # Improved matching logic:
+        # 1. Exact match
+        if model_normalized == db_model_name:
+            return True, f"✓ נמצא במאגר: {db_model}"
+        
+        # 2. Model name appears at the start of db_model_name
+        if db_model_name.startswith(model_normalized):
+            return True, f"✓ נמצא במאגר: {db_model}"
+        
+        # 3. db_model_name appears at the start of model name (for variations like "i30 N")
+        if model_normalized.startswith(db_model_name):
+            return True, f"✓ נמצא במאגר: {db_model}"
+        
+        # 4. Handle common variations (e.g., "rav4" vs "rav-4")
+        model_no_spaces = model_normalized.replace(' ', '').replace('-', '')
+        db_model_no_spaces = db_model_name.replace(' ', '').replace('-', '')
+        if model_no_spaces == db_model_no_spaces:
             return True, f"✓ נמצא במאגר: {db_model}"
     
     return False, f"⚠️ דגם '{model}' של {brand} לא נמצא במאגר הישראלי"

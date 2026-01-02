@@ -291,7 +291,7 @@ israeli_car_market_full_compilation = {
         "C5 X (2021-2025)",
         "Berlingo (1996-2025)",
         "Jumpy (1994-2025)",
-        "C2 (2003-209)",
+        "C2 (2003-2009)",
         "C4 Picasso (2006-2018)",
         "Grand C4 Picasso (2006-2022)",
         "C-Elysee (2012-2025)",
@@ -316,8 +316,7 @@ israeli_car_market_full_compilation = {
         "Laguna (1994-2015)",
         "Talisman (2015-2022)",
         "Zoe (2012-2025)",
-        "Twingo (1993-2025)",
-        "מדבר על דגם הדיזל 1.5 ליטר"
+        "Twingo (1993-2025)"
     ],
     "Seat": [
         "Ibiza (1984-2025)",
