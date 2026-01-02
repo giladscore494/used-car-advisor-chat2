@@ -15,6 +15,14 @@ import numpy as np
 from google import genai
 from google.genai import types as genai_types
 
+# --- Israeli Car Market Data ---
+try:
+    from car_models_dict import israeli_car_market_full_compilation
+    print(f"[CAR_DICT] ✅ Loaded {len(israeli_car_market_full_compilation)} manufacturers")
+except Exception as e:
+    print(f"[CAR_DICT] ⚠️ Failed to load car_models_dict: {e}")
+    israeli_car_market_full_compilation = {}
+
 # --------------------------------------------------
 # עיצוב כללי
 # --------------------------------------------------
@@ -123,6 +131,55 @@ def normalize_car_values(df):
         df["turbo"] = df["turbo"].replace({"כן": True, "לא": False, True: True, False: False})
     return df
 
+def validate_car_in_israeli_market(brand: str, model: str) -> tuple[bool, str]:
+    """
+    Validate if a car model exists in the Israeli market database.
+    Returns: (is_valid, message)
+    """
+    if not israeli_car_market_full_compilation:
+        # If dictionary not loaded, skip validation
+        return True, ""
+    
+    # Normalize brand name for case-insensitive matching
+    brand_normalized = brand.strip().lower()
+    
+    # Find matching brand
+    matching_brand = None
+    for db_brand in israeli_car_market_full_compilation.keys():
+        if db_brand.lower() == brand_normalized:
+            matching_brand = db_brand
+            break
+    
+    if not matching_brand:
+        return False, f"⚠️ מותג '{brand}' לא נמצא במאגר הישראלי"
+    
+    # Check if model exists (basic substring matching)
+    model_normalized = model.strip().lower()
+    models_list = israeli_car_market_full_compilation[matching_brand]
+    
+    for db_model in models_list:
+        # Extract model name without year range
+        db_model_name = db_model.split('(')[0].strip().lower()
+        if model_normalized in db_model_name or db_model_name in model_normalized:
+            return True, f"✓ נמצא במאגר: {db_model}"
+    
+    return False, f"⚠️ דגם '{model}' של {brand} לא נמצא במאגר הישראלי"
+
+def add_market_validation_to_results(df):
+    """Add validation column to results dataframe"""
+    if df.empty or not israeli_car_market_full_compilation:
+        return df
+    
+    validations = []
+    for _, row in df.iterrows():
+        brand = row.get('brand', '')
+        model = row.get('model', '')
+        is_valid, msg = validate_car_in_israeli_market(brand, model)
+        validations.append({'is_valid': is_valid, 'message': msg})
+    
+    df['market_validation'] = [v['message'] for v in validations]
+    return df
+
 # --------------------------------------------------
 # מיפויים
 # --------------------------------------------------
@@ -140,7 +197,7 @@ column_map_he = {
     "annual_energy_cost":"עלות דלק שנתית (₪)","total_annual_cost":"עלות כוללת שנתית (₪)",
     "reliability_score":"אמינות","maintenance_cost":"עלות אחזקה (₪/שנה)","safety_rating":"בטיחות",
     "insurance_cost":"עלות ביטוח (₪/שנה)","resale_value":"שמירת ערך","performance_score":"ביצועים",
-    "comfort_features":"נוחות","suitability":"התאמה","market_supply":"היצע בשוק"
+    "comfort_features":"נוחות","suitability":"התאמה","market_supply":"היצע בשוק","market_validation":"אימות שוק ישראלי"
 }
 
 method_map_he = {
@@ -160,11 +217,23 @@ def call_gemini_with_search(profile: dict) -> dict:
     if gemini_client is None:
         return {"_error": gemini_init_error or "Gemini client unavailable."}
 
+    # Prepare Israeli market models reference
+    market_models_sample = ""
+    if israeli_car_market_full_compilation:
+        # Show top 10 manufacturers with their model count as reference
+        top_brands = list(israeli_car_market_full_compilation.keys())[:10]
+        market_models_sample = "\n".join([
+            f"  - {brand}: {len(israeli_car_market_full_compilation[brand])} models"
+            for brand in top_brands
+        ])
+        market_models_sample = f"\n\nISRAELI MARKET MODELS REFERENCE (sample):\n{market_models_sample}\n... and {len(israeli_car_market_full_compilation) - 10} more manufacturers"
+
     prompt = f"""
 Please recommend cars for an Israeli customer. Here is the user profile (JSON):
 {json.dumps(profile, ensure_ascii=False, indent=2)}
 
 You are an independent automotive data analyst for the **Israeli used car market**.
+{market_models_sample}
 
 🔴 CRITICAL INSTRUCTION: USE GOOGLE SEARCH TOOL
 You MUST use the Google Search tool to verify:
@@ -172,6 +241,9 @@ You MUST use the Google Search tool to verify:
 - realistic used prices in Israel (NIS)
 - realistic fuel/energy consumption values
 - common issues (DSG, reliability, recalls)
+
+🔴 CRITICAL: ONLY recommend models that are actually sold in the Israeli market.
+Reference the Israeli market models database above. Do NOT invent models or trims that don't exist.
 
 Hard constraints:
 - Return only ONE top-level JSON object.
@@ -211,6 +283,7 @@ recommended_cars: array of 5–10 cars. EACH car MUST include:
 IMPORTANT MARKET REALITY:
 - לפני שאתה בוחר רכבים, תבדוק בזהירות בעזרת החיפוש שדגם כזה אכן נמכר בישראל, בתצורת מנוע וגיר שאתה מציג.
 - אל תמציא דגמים או גרסאות שלא קיימים ביד 2 בישראל.
+- השתמש במידע מהמאגר הישראלי לעיל כנקודת ייחוס ראשונית.
 - מודלים שלא נמכרו כמעט / אין להם היצע – סמן "market_supply": "נמוך" והסבר בעברית.
 
 Return ONLY raw JSON. Do not add any backticks or explanation text.
@@ -468,6 +541,9 @@ elif st.session_state.ui_step == 5:
                     if not results_df.empty:
                         # Normalize
                         results_df = normalize_car_values(results_df)
+                        
+                        # Add market validation
+                        results_df = add_market_validation_to_results(results_df)
 
                         if "avg_fuel_consumption" not in results_df.columns:
                             st.error("חסר שדה avg_fuel_consumption בפלט.")
