@@ -8,8 +8,6 @@ import streamlit as st
 import json
 import os
 
-from openai import OpenAI
-
 # --------------------------------------------------
 # Page config
 # --------------------------------------------------
@@ -41,10 +39,35 @@ KIMI_TOOLS = [{"type": "builtin_function", "function": {"name": "$web_search"}}]
 
 
 def get_kimi_client():
-    api_key = st.secrets.get("MOONSHOT_API_KEY") if "MOONSHOT_API_KEY" in st.secrets else os.getenv("MOONSHOT_API_KEY")
+    api_key = None
+
+    try:
+        api_key = st.secrets.get("MOONSHOT_API_KEY")
+    except Exception:
+        api_key = None
+
     if not api_key:
-        return None, "⚠️ לא נמצא MOONSHOT_API_KEY בסודות או במשתני סביבה."
-    return OpenAI(api_key=api_key, base_url=KIMI_BASE_URL), None
+        api_key = os.getenv("MOONSHOT_API_KEY")
+
+    if not api_key:
+        return None, "Missing MOONSHOT_API_KEY. Add it to Streamlit secrets or environment variables."
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.moonshot.ai/v1",
+        )
+        return client, None
+    except TypeError as exc:
+        return None, (
+            "Failed to create OpenAI-compatible client. "
+            "This usually means an openai/httpx dependency mismatch. "
+            "Check requirements.txt pins: openai>=1.55.3,<2 and httpx==0.27.2. "
+            f"Original error: {exc}"
+        )
+    except Exception as exc:
+        return None, f"Failed to create Kimi client: {type(exc).__name__}: {exc}"
 
 
 # --------------------------------------------------
@@ -123,7 +146,7 @@ def build_user_message(profile: dict) -> str:
 # --------------------------------------------------
 # Kimi tool-call loop
 # --------------------------------------------------
-def call_kimi(client: OpenAI, profile: dict) -> dict:
+def call_kimi(client, profile: dict) -> dict:
     """Send request to Kimi K2.6 with web_search, handle tool-call loop."""
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -198,6 +221,14 @@ st.markdown(
     "יש לבדוק כל רכב במכון ובמקורות רשמיים.</div>",
     unsafe_allow_html=True,
 )
+
+with st.sidebar.expander("Debug"):
+    import sys
+    import openai
+    import httpx
+    st.write("Python:", sys.version)
+    st.write("openai:", getattr(openai, "__version__", "unknown"))
+    st.write("httpx:", getattr(httpx, "__version__", "unknown"))
 
 # --------------------------------------------------
 # Questionnaire
@@ -279,7 +310,7 @@ cost_ack = st.checkbox("אני מבין שזה ניסוי עם עלות API", ke
 col_btn, col_clear = st.columns([1, 1])
 with col_btn:
     submit_disabled = bool(errors) or not cost_ack
-    submit = st.button("🔍 קבל המלצות עם Kimi", disabled=submit_disabled, type="primary")
+    submit_clicked = st.button("🔍 קבל המלצות עם Kimi", disabled=submit_disabled, type="primary")
 with col_clear:
     if st.button("🗑️ נקה תוצאות"):
         st.session_state.kimi_result = None
@@ -292,7 +323,7 @@ with col_clear:
 turbo_map = {"לא משנה": None, "כן": True, "לא": False}
 excluded = [c.strip() for c in excluded_colors.split(",") if c.strip()] if excluded_colors else []
 
-if submit and not errors:
+if submit_clicked and not errors:
     user_profile = {
         "budget_nis": [float(budget_min), float(budget_max)],
         "years": [int(year_min), int(year_max)],
@@ -326,21 +357,22 @@ if submit and not errors:
     client, err = get_kimi_client()
     if err:
         st.error(err)
-    else:
-        with st.spinner("🔄 Kimi K2.6 מחפש ומנתח... (עשוי לקחת עד דקה)"):
-            try:
-                result = call_kimi(client, user_profile)
-                st.session_state.kimi_raw = result["raw"]
-                parsed = parse_kimi_result(result["raw"])
-                if parsed:
-                    st.session_state.kimi_result = parsed
-                else:
-                    st.session_state.kimi_result = None
-                    st.error("❌ לא הצלחתי לפרסר את תשובת Kimi כ-JSON.")
-                    with st.expander("תשובה גולמית"):
-                        st.code(result["raw"])
-            except Exception as exc:
-                st.error(f"❌ שגיאה בקריאה ל-Kimi: {exc}")
+        st.stop()
+
+    with st.spinner("🔄 Kimi K2.6 מחפש ומנתח... (עשוי לקחת עד דקה)"):
+        try:
+            result = call_kimi(client, user_profile)
+            st.session_state.kimi_raw = result["raw"]
+            parsed = parse_kimi_result(result["raw"])
+            if parsed:
+                st.session_state.kimi_result = parsed
+            else:
+                st.session_state.kimi_result = None
+                st.error("❌ לא הצלחתי לפרסר את תשובת Kimi כ-JSON.")
+                with st.expander("תשובה גולמית"):
+                    st.code(result["raw"])
+        except Exception as exc:
+            st.error(f"❌ שגיאה בקריאה ל-Kimi: {exc}")
 
 # --------------------------------------------------
 # Display results
