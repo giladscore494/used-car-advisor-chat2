@@ -32,13 +32,35 @@ st.markdown(
 )
 
 # --------------------------------------------------
-# Kimi client
+# Constants
 # --------------------------------------------------
 KIMI_MODEL = "kimi-k2.6"
 KIMI_BASE_URL = "https://api.moonshot.ai/v1"
 MAX_TOKENS = 12000
 MAX_TOOL_CALL_ITERATIONS = 10
 KIMI_TOOLS = [{"type": "builtin_function", "function": {"name": "$web_search"}}]
+
+# Source validation keywords
+PRICE_KEYWORDS = ["price", "market"]
+TECHNICAL_KEYWORDS = ["safety", "fuel", "maintenance", "faults", "official"]
+
+# Fit classification weights and thresholds
+FIT_WEIGHT_VERIFIED_STATUS = 40
+FIT_WEIGHT_NEEDS_REVIEW_STATUS = 20
+FIT_WEIGHT_HAS_SOURCES = 15
+FIT_WEIGHT_HAS_PRICE_SOURCE = 10
+FIT_WEIGHT_HAS_TECHNICAL_SOURCE = 10
+FIT_WEIGHT_PRICE_IN_BUDGET = 15
+FIT_WEIGHT_NO_HIGH_RISKS = 10
+FIT_WEIGHT_FEW_HIGH_RISKS = 5
+
+FIT_THRESHOLD_HIGH = 75
+FIT_THRESHOLD_MEDIUM = 50
+FIT_THRESHOLD_REVIEW = 30
+
+# Display constants
+RISK_ICONS = {"low": "🟢", "medium": "🟡", "high": "🔴"}
+DEFAULT_MAX_BUDGET = 999999
 
 
 def get_kimi_client():
@@ -353,9 +375,9 @@ def validate_sources(car: dict) -> dict:
     for src in sources:
         if isinstance(src, dict):
             supports = src.get("supports", "")
-            if any(x in supports for x in ["price", "market"]):
+            if any(x in supports for x in PRICE_KEYWORDS):
                 has_price_source = True
-            if any(x in supports for x in ["safety", "fuel", "maintenance", "faults", "official"]):
+            if any(x in supports for x in TECHNICAL_KEYWORDS):
                 has_technical_source = True
         elif isinstance(src, str):
             # Legacy string source - count as general
@@ -388,11 +410,11 @@ def calculate_local_fit(car: dict, profile: dict) -> dict:
     price_analysis = car.get("price_analysis", {})
     price_range = price_analysis.get("estimated_price_range_nis", [None, None])
     budget_min = profile.get("budget_nis", [0, 0])[0]
-    budget_max = profile.get("budget_nis", [0, 999999])[1]
+    budget_max = profile.get("budget_nis", [0, DEFAULT_MAX_BUDGET])[1]
     
+    # Check if price ranges overlap (car price intersects with budget)
     price_in_budget = False
     if price_range[0] and price_range[1]:
-        # Check if there's overlap between price range and budget
         price_in_budget = price_range[0] <= budget_max and price_range[1] >= budget_min
     
     # Check maintenance risk
@@ -402,47 +424,47 @@ def calculate_local_fit(car: dict, profile: dict) -> dict:
         if fault.get("risk_level") == "high"
     )
     
-    # Calculate fit level
+    # Calculate fit level using weighted scoring
     fit_score = 0
     
     # Status weight (most important)
     if status == "verified":
-        fit_score += 40
+        fit_score += FIT_WEIGHT_VERIFIED_STATUS
     elif status == "needs_review":
-        fit_score += 20
+        fit_score += FIT_WEIGHT_NEEDS_REVIEW_STATUS
     
     # Source quality
     if source_validation["has_sources"]:
-        fit_score += 15
+        fit_score += FIT_WEIGHT_HAS_SOURCES
     if source_validation["has_price_source"]:
-        fit_score += 10
+        fit_score += FIT_WEIGHT_HAS_PRICE_SOURCE
     if source_validation["has_technical_source"]:
-        fit_score += 10
+        fit_score += FIT_WEIGHT_HAS_TECHNICAL_SOURCE
     
     # Price match
     if price_in_budget:
-        fit_score += 15
+        fit_score += FIT_WEIGHT_PRICE_IN_BUDGET
     
     # Risk level
     if high_risk_faults == 0:
-        fit_score += 10
+        fit_score += FIT_WEIGHT_NO_HIGH_RISKS
     elif high_risk_faults <= 2:
-        fit_score += 5
+        fit_score += FIT_WEIGHT_FEW_HIGH_RISKS
     
-    # Classify
-    if fit_score >= 75:
+    # Classify using thresholds
+    if fit_score >= FIT_THRESHOLD_HIGH:
         return {
             "level": "high",
             "label": "התאמה גבוהה",
             "color": "#16a34a"
         }
-    elif fit_score >= 50:
+    elif fit_score >= FIT_THRESHOLD_MEDIUM:
         return {
             "level": "medium",
             "label": "התאמה בינונית",
             "color": "#ca8a04"
         }
-    elif fit_score >= 30:
+    elif fit_score >= FIT_THRESHOLD_REVIEW:
         return {
             "level": "review",
             "label": "דורש בדיקה",
@@ -584,7 +606,7 @@ def display_car_card(car: dict, profile: dict, show_minimal: bool = False):
                 when = fault.get("more_likely_when", "")
                 advice = fault.get("inspection_advice", "")
                 
-                risk_icon = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(risk, "⚪")
+                risk_icon = RISK_ICONS.get(risk, "⚪")
                 st.markdown(f"**{risk_icon} {component}**: {fault_desc}")
                 if when:
                     st.caption(f"סביר יותר כאשר: {when}")
