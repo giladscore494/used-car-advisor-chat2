@@ -76,20 +76,26 @@ def get_kimi_client():
 # --------------------------------------------------
 # Prompt builder
 # --------------------------------------------------
-SYSTEM_PROMPT = """You are an independent automotive data analyst for the Israeli used-car market.
+SYSTEM_PROMPT = """You are an Israeli used-car market analyst.
 Recommend cars for the user profile below.
-You must use internet search to verify Israeli-market reality.
+You MUST use web search to verify Israeli-market reality.
+You MUST prefer Israeli-market sources and official/structured sources.
 
 Critical rules:
-- Focus only on Israeli used cars.
-- Do not invent models, trims, prices, safety ratings, warranty data, license fees, common faults, or market supply.
-- If a field is not verified from a reliable source, return null or "unknown".
-- Return only one valid JSON object.
-- No markdown.
-- No text before or after JSON.
-- Fit score means preference fit only, not purchase approval.
-- Do not use first-person language like "אני ממליץ", "הייתי קונה", "תקנה", or "אל תקנה".
-- Always separate preference fit from risks.
+- Focus ONLY on Israeli used cars.
+- Do NOT invent ratings, prices, fees, trims, faults, or market supply.
+- Use official ratings ONLY when there is an official source (e.g., Euro NCAP, Israeli safety grade).
+- If no official source exists, return "not_official" or null and explain the estimate basis.
+- Do NOT create arbitrary 1-10 scores for reliability, safety, resale, comfort, insurance, or maintenance.
+- Safety should be based on official crash-test source when available, preferably Euro NCAP for the correct generation/year range.
+- Fuel consumption should separate: official_consumption, real_world_estimate, reasoning.
+- Annual license fee should use official Israeli calculation/source when possible. If not verified, return null.
+- Maintenance cost must include a reasoning breakdown and common faults by component.
+- Common faults must be tied to age, mileage, engine, gearbox, fuel type, turbo/hybrid/electric system, and known technical components.
+- Market supply must be based on visible Israeli listing/search evidence when possible. If not verified, return "unknown".
+- Every recommended car must include sources.
+- If sources are missing, the car must be marked as "needs_review" and not as "verified".
+- Return only valid JSON. No markdown. No text before or after JSON.
 - Use Hebrew for user-facing explanation fields.
 
 Required output schema:
@@ -100,40 +106,110 @@ Required output schema:
     {
       "brand": "",
       "model": "",
-      "year_range": "",
+      "generation_or_year_range": "",
+      "recommended_years": "",
       "fuel": "",
       "gear": "",
+      "engine_or_drivetrain": "",
       "turbo": null,
-      "engine_cc": null,
-      "price_range_nis": [null, null],
-      "avg_fuel_consumption": null,
-      "fuel_method": "",
-      "annual_fee": null,
-      "fee_method": "official|unknown",
-      "reliability_score": null,
-      "reliability_method": "",
-      "maintenance_cost": null,
-      "maintenance_method": "",
-      "safety_rating": null,
-      "safety_method": "",
-      "insurance_cost": null,
-      "insurance_method": "",
-      "resale_value": null,
-      "resale_method": "",
-      "performance_score": null,
-      "performance_method": "",
-      "comfort_features": null,
-      "comfort_method": "",
-      "suitability": null,
-      "suitability_method": "",
-      "market_supply": "גבוה|בינוני|נמוך|unknown",
-      "supply_method": "",
-      "fit_score": null,
-      "comparison_comment": "",
-      "not_recommended_reason": "",
-      "best_for": [],
-      "not_ideal_for": [],
-      "practical_summary": "",
+      "body_style": "",
+      "seats": "",
+      
+      "price_analysis": {
+        "estimated_price_range_nis": [null, null],
+        "confidence": "high|medium|low|unknown",
+        "basis": "",
+        "sources": []
+      },
+      
+      "official_ratings": {
+        "safety": {
+          "rating": null,
+          "rating_system": "Euro NCAP|IIHS|Israeli safety grade|unknown",
+          "year_tested": null,
+          "generation_match": "exact|close|uncertain|unknown",
+          "source": ""
+        },
+        "emissions_or_green_score": {
+          "value": null,
+          "system": "Israeli green score|Euro standard|unknown",
+          "source": ""
+        },
+        "official_fuel_consumption": {
+          "value": null,
+          "unit": "km/l|l/100km|kWh/100km|unknown",
+          "source": ""
+        },
+        "annual_license_fee": {
+          "estimated_nis": null,
+          "method": "official|estimated|unknown",
+          "reasoning": "",
+          "source": ""
+        }
+      },
+      
+      "real_world_use": {
+        "real_world_fuel_estimate": null,
+        "fuel_estimate_reasoning": "",
+        "city_vs_highway_note": "",
+        "comfort_practical_note": "",
+        "performance_practical_note": ""
+      },
+      
+      "maintenance_analysis": {
+        "estimated_annual_maintenance_range_nis": [null, null],
+        "confidence": "high|medium|low|unknown",
+        "calculation_reasoning": "",
+        "assumptions": {
+          "vehicle_age_years": null,
+          "annual_km": null,
+          "likely_mileage_range": "",
+          "service_history_importance": ""
+        },
+        "common_faults_by_component": [
+          {
+            "component": "engine|gearbox|turbo|hybrid_system|battery|cooling|suspension|brakes|electronics|ac|body|other",
+            "fault": "",
+            "risk_level": "low|medium|high|unknown",
+            "more_likely_when": "high mileage|poor maintenance|city driving|age|known generation issue|unknown",
+            "inspection_advice": "",
+            "source": ""
+          }
+        ],
+        "expensive_risk_items": [],
+        "cheap_common_items": []
+      },
+      
+      "ownership_risk": {
+        "main_risks": [],
+        "what_to_check_before_buying": [],
+        "avoid_if": [],
+        "good_candidate_if": []
+      },
+      
+      "market_supply": {
+        "level": "high|medium|low|unknown",
+        "basis": "",
+        "sources": []
+      },
+      
+      "fit_analysis": {
+        "why_it_fits": "",
+        "why_it_may_not_fit": "",
+        "best_for": [],
+        "not_ideal_for": [],
+        "confidence": "high|medium|low|unknown"
+      },
+      
+      "recommendation_status": "verified|needs_review|not_recommended",
+      "sources": []
+    }
+  ],
+  "rejected_options": [
+    {
+      "brand": "",
+      "model": "",
+      "reason": "",
       "sources": []
     }
   ],
@@ -261,6 +337,123 @@ def parse_kimi_result(raw: str) -> dict | None:
         return json.loads(text)
     except json.JSONDecodeError:
         return None
+
+
+# --------------------------------------------------
+# Source validation and local fit classification
+# --------------------------------------------------
+def validate_sources(car: dict) -> dict:
+    """Validate that car has sufficient sources."""
+    sources = car.get("sources", [])
+    
+    # Count sources by type
+    has_price_source = False
+    has_technical_source = False
+    
+    for src in sources:
+        if isinstance(src, dict):
+            supports = src.get("supports", "")
+            if any(x in supports for x in ["price", "market"]):
+                has_price_source = True
+            if any(x in supports for x in ["safety", "fuel", "maintenance", "faults", "official"]):
+                has_technical_source = True
+        elif isinstance(src, str):
+            # Legacy string source - count as general
+            has_technical_source = True
+    
+    return {
+        "has_sources": len(sources) > 0,
+        "has_price_source": has_price_source,
+        "has_technical_source": has_technical_source,
+        "source_count": len(sources)
+    }
+
+
+def calculate_local_fit(car: dict, profile: dict) -> dict:
+    """Calculate local fit classification based on evidence."""
+    # Get recommendation status
+    status = car.get("recommendation_status", "needs_review")
+    
+    if status == "not_recommended":
+        return {
+            "level": "low",
+            "label": "התאמה נמוכה",
+            "color": "#dc2626"
+        }
+    
+    # Validate sources
+    source_validation = validate_sources(car)
+    
+    # Check price match
+    price_analysis = car.get("price_analysis", {})
+    price_range = price_analysis.get("estimated_price_range_nis", [None, None])
+    budget_min = profile.get("budget_nis", [0, 0])[0]
+    budget_max = profile.get("budget_nis", [0, 999999])[1]
+    
+    price_in_budget = False
+    if price_range[0] and price_range[1]:
+        # Check if there's overlap between price range and budget
+        price_in_budget = price_range[0] <= budget_max and price_range[1] >= budget_min
+    
+    # Check maintenance risk
+    maintenance = car.get("maintenance_analysis", {})
+    high_risk_faults = sum(
+        1 for fault in maintenance.get("common_faults_by_component", [])
+        if fault.get("risk_level") == "high"
+    )
+    
+    # Calculate fit level
+    fit_score = 0
+    
+    # Status weight (most important)
+    if status == "verified":
+        fit_score += 40
+    elif status == "needs_review":
+        fit_score += 20
+    
+    # Source quality
+    if source_validation["has_sources"]:
+        fit_score += 15
+    if source_validation["has_price_source"]:
+        fit_score += 10
+    if source_validation["has_technical_source"]:
+        fit_score += 10
+    
+    # Price match
+    if price_in_budget:
+        fit_score += 15
+    
+    # Risk level
+    if high_risk_faults == 0:
+        fit_score += 10
+    elif high_risk_faults <= 2:
+        fit_score += 5
+    
+    # Classify
+    if fit_score >= 75:
+        return {
+            "level": "high",
+            "label": "התאמה גבוהה",
+            "color": "#16a34a"
+        }
+    elif fit_score >= 50:
+        return {
+            "level": "medium",
+            "label": "התאמה בינונית",
+            "color": "#ca8a04"
+        }
+    elif fit_score >= 30:
+        return {
+            "level": "review",
+            "label": "דורש בדיקה",
+            "color": "#ea580c"
+        }
+    else:
+        return {
+            "level": "low",
+            "label": "התאמה נמוכה",
+            "color": "#dc2626"
+        }
 
 
 # --------------------------------------------------
@@ -446,59 +639,53 @@ if submit_clicked and not errors:
 if st.session_state.kimi_result:
     data = st.session_state.kimi_result
     cars = data.get("recommended_cars", [])
+    rejected = data.get("rejected_options", [])
+    
+    # Build user profile for fit calculation
+    user_profile = {
+        "budget_nis": [float(budget_min), float(budget_max)],
+    }
 
-    st.subheader(f"🏆 נמצאו {len(cars)} המלצות")
-
+    # Separate cars by status
+    verified_cars = []
+    review_cars = []
+    not_recommended_cars = []
+    
     for car in cars:
-        brand = car.get("brand", "")
-        model = car.get("model", "")
-        year_range = car.get("year_range", "")
-        price = car.get("price_range_nis", [None, None])
-        price_str = f"₪{price[0]:,.0f} – ₪{price[1]:,.0f}" if price and price[0] and price[1] else "לא ידוע"
-        fit = car.get("fit_score")
-        fit_str = f"⭐ {fit}/10" if fit is not None else ""
+        status = car.get("recommendation_status", "needs_review")
+        if status == "verified":
+            verified_cars.append(car)
+        elif status == "needs_review":
+            review_cars.append(car)
+        else:
+            not_recommended_cars.append(car)
 
-        st.markdown(
-            f'<div class="car-card">'
-            f"<h3>{brand} {model} ({year_range}) {fit_str}</h3>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+    # Display verified recommendations
+    if verified_cars:
+        st.subheader(f"✅ המלצות מאומתות ({len(verified_cars)})")
+        for car in verified_cars:
+            display_car_card(car, user_profile)
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("טווח מחיר", price_str)
-            st.metric("דלק", car.get("fuel", "—"))
-            st.metric("תיבה", car.get("gear", "—"))
-            st.metric("נפח מנוע", car.get("engine_cc") or "—")
-        with c2:
-            st.metric("אמינות", f'{car.get("reliability_score", "—")}/10')
-            st.metric("עלות אחזקה שנתית", f'₪{car.get("maintenance_cost", "—")}')
-            st.metric("היצע בשוק", car.get("market_supply", "—"))
-        with c3:
-            st.metric("בטיחות", f'{car.get("safety_rating", "—")}/10')
-            st.metric("שמירת ערך", f'{car.get("resale_value", "—")}/10')
-            st.metric("ביצועים", f'{car.get("performance_score", "—")}/10')
+    # Display needs review
+    if review_cars:
+        st.subheader(f"🔍 אפשרויות לבדיקה נוספת ({len(review_cars)})")
+        for car in review_cars:
+            display_car_card(car, user_profile)
 
-        comment = car.get("comparison_comment", "")
-        if comment:
-            st.info(f"💬 {comment}")
-
-        not_rec = car.get("not_recommended_reason", "")
-        if not_rec:
-            st.warning(f"⚠️ {not_rec}")
-
-        practical = car.get("practical_summary", "")
-        if practical:
-            st.caption(practical)
-
-        sources = car.get("sources", [])
-        if sources:
-            with st.expander("מקורות"):
-                for src in sources:
-                    st.write(f"- {src}")
-
-        st.markdown("---")
+    # Display not recommended
+    if not_recommended_cars:
+        st.subheader(f"⛔ נפסלו / לא מתאימים ({len(not_recommended_cars)})")
+        for car in not_recommended_cars:
+            display_car_card(car, user_profile, show_minimal=True)
+    
+    # Display rejected options
+    if rejected:
+        st.subheader(f"❌ אפשרויות שנפסלו ({len(rejected)})")
+        for rej in rejected:
+            brand = rej.get("brand", "")
+            model = rej.get("model", "")
+            reason = rej.get("reason", "")
+            st.markdown(f"**{brand} {model}**: {reason}")
 
     # General notes
     notes = data.get("general_notes", [])
@@ -528,3 +715,223 @@ elif st.session_state.kimi_raw and not st.session_state.kimi_result:
     # JSON parse failed but we have raw content
     with st.expander("תשובה גולמית (לא JSON תקין)"):
         st.code(st.session_state.kimi_raw)
+
+
+def display_car_card(car: dict, profile: dict, show_minimal: bool = False):
+    """Display a car card with the new schema."""
+    brand = car.get("brand", "")
+    model = car.get("model", "")
+    generation = car.get("generation_or_year_range", "")
+    recommended_years = car.get("recommended_years", "")
+    
+    # Calculate local fit
+    fit = calculate_local_fit(car, profile)
+    fit_label = fit["label"]
+    fit_color = fit["color"]
+    
+    # Build header
+    header = f"{brand} {model}"
+    if generation:
+        header += f" ({generation})"
+    if recommended_years:
+        header += f" | מומלץ: {recommended_years}"
+    
+    st.markdown(
+        f'<div class="car-card">'
+        f'<h3>{header}</h3>'
+        f'<p style="color:{fit_color}; font-weight:bold;">רמת התאמה משוערת: {fit_label}</p>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    
+    if show_minimal:
+        # For not recommended, show minimal info
+        st.caption(f"דלק: {car.get('fuel', '—')} | תיבה: {car.get('gear', '—')}")
+        return
+    
+    # Basic info
+    st.caption(
+        f"🚗 {car.get('body_style', '—')} | "
+        f"⛽ {car.get('fuel', '—')} | "
+        f"⚙️ {car.get('gear', '—')} | "
+        f"🔧 {car.get('engine_or_drivetrain', '—')} | "
+        f"💺 {car.get('seats', '—')} מושבים"
+    )
+    
+    # Price analysis
+    price_analysis = car.get("price_analysis", {})
+    price_range = price_analysis.get("estimated_price_range_nis", [None, None])
+    price_str = f"₪{price_range[0]:,.0f} – ₪{price_range[1]:,.0f}" if price_range[0] and price_range[1] else "לא ידוע"
+    price_confidence = price_analysis.get("confidence", "unknown")
+    price_basis = price_analysis.get("basis", "")
+    
+    st.markdown(f"**💰 מחיר משוער**: {price_str} (רמת ודאות: {price_confidence})")
+    if price_basis:
+        st.caption(f"בסיס: {price_basis}")
+    
+    # Official ratings
+    official = car.get("official_ratings", {})
+    
+    # Safety rating
+    safety = official.get("safety", {})
+    safety_rating = safety.get("rating")
+    if safety_rating:
+        safety_system = safety.get("rating_system", "")
+        year_tested = safety.get("year_tested", "")
+        generation_match = safety.get("generation_match", "")
+        safety_source = safety.get("source", "")
+        st.markdown(
+            f"**🛡️ בטיחות רשמית**: {safety_rating} ({safety_system})"
+        )
+        st.caption(
+            f"שנת בדיקה: {year_tested} | התאמת דור: {generation_match}"
+        )
+        if safety_source:
+            st.caption(f"מקור: {safety_source}")
+    else:
+        st.markdown("**🛡️ בטיחות רשמית**: לא אומת")
+    
+    # Official fuel consumption
+    official_fuel = official.get("official_fuel_consumption", {})
+    fuel_value = official_fuel.get("value")
+    if fuel_value:
+        fuel_unit = official_fuel.get("unit", "")
+        fuel_source = official_fuel.get("source", "")
+        st.markdown(f"**⛽ צריכת דלק רשמית**: {fuel_value} {fuel_unit}")
+        if fuel_source:
+            st.caption(f"מקור: {fuel_source}")
+    
+    # Real world fuel estimate
+    real_world = car.get("real_world_use", {})
+    real_fuel = real_world.get("real_world_fuel_estimate")
+    if real_fuel:
+        fuel_reasoning = real_world.get("fuel_estimate_reasoning", "")
+        st.markdown(f"**⛽ צריכת דלק בפועל (משוערת)**: {real_fuel}")
+        if fuel_reasoning:
+            st.caption(f"הסבר: {fuel_reasoning}")
+    
+    # Annual license fee
+    license_fee = official.get("annual_license_fee", {})
+    fee_nis = license_fee.get("estimated_nis")
+    if fee_nis:
+        fee_method = license_fee.get("method", "")
+        fee_reasoning = license_fee.get("reasoning", "")
+        st.markdown(f"**💳 אגרת רישוי שנתית**: ₪{fee_nis:,.0f} ({fee_method})")
+        if fee_reasoning:
+            st.caption(f"הסבר: {fee_reasoning}")
+    
+    # Maintenance analysis
+    maintenance = car.get("maintenance_analysis", {})
+    maint_range = maintenance.get("estimated_annual_maintenance_range_nis", [None, None])
+    if maint_range[0] and maint_range[1]:
+        maint_confidence = maintenance.get("confidence", "unknown")
+        maint_reasoning = maintenance.get("calculation_reasoning", "")
+        st.markdown(
+            f"**🔧 עלות אחזקה שנתית משוערת**: "
+            f"₪{maint_range[0]:,.0f} – ₪{maint_range[1]:,.0f} "
+            f"(ודאות: {maint_confidence})"
+        )
+        if maint_reasoning:
+            st.caption(f"בסיס חישוב: {maint_reasoning}")
+    
+    # Common faults
+    faults = maintenance.get("common_faults_by_component", [])
+    if faults:
+        with st.expander("⚠️ תקלות נפוצות לפי רכיב"):
+            for fault in faults:
+                component = fault.get("component", "")
+                fault_desc = fault.get("fault", "")
+                risk = fault.get("risk_level", "unknown")
+                when = fault.get("more_likely_when", "")
+                advice = fault.get("inspection_advice", "")
+                
+                risk_icon = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(risk, "⚪")
+                st.markdown(f"**{risk_icon} {component}**: {fault_desc}")
+                if when:
+                    st.caption(f"סביר יותר כאשר: {when}")
+                if advice:
+                    st.caption(f"עצה לבדיקה: {advice}")
+    
+    expensive_risks = maintenance.get("expensive_risk_items", [])
+    if expensive_risks:
+        st.warning(f"**פריטי סיכון יקרים**: {', '.join(expensive_risks)}")
+    
+    cheap_common = maintenance.get("cheap_common_items", [])
+    if cheap_common:
+        st.info(f"**פריטים נפוצים זולים**: {', '.join(cheap_common)}")
+    
+    # Ownership risk
+    ownership = car.get("ownership_risk", {})
+    main_risks = ownership.get("main_risks", [])
+    if main_risks:
+        with st.expander("⚡ סיכונים עיקריים"):
+            for risk in main_risks:
+                st.write(f"• {risk}")
+    
+    what_to_check = ownership.get("what_to_check_before_buying", [])
+    if what_to_check:
+        with st.expander("✅ מה לבדוק לפני קנייה"):
+            for item in what_to_check:
+                st.write(f"• {item}")
+    
+    avoid_if = ownership.get("avoid_if", [])
+    if avoid_if:
+        st.warning("**להימנע אם**: " + ", ".join(avoid_if))
+    
+    good_if = ownership.get("good_candidate_if", [])
+    if good_if:
+        st.success("**מועמד טוב אם**: " + ", ".join(good_if))
+    
+    # Market supply
+    market = car.get("market_supply", {})
+    supply_level = market.get("level", "unknown")
+    supply_basis = market.get("basis", "")
+    st.markdown(f"**📊 היצע בשוק**: {supply_level}")
+    if supply_basis:
+        st.caption(f"בסיס: {supply_basis}")
+    
+    # Fit analysis
+    fit_analysis = car.get("fit_analysis", {})
+    why_fits = fit_analysis.get("why_it_fits", "")
+    why_not = fit_analysis.get("why_it_may_not_fit", "")
+    
+    if why_fits or why_not:
+        with st.expander("🎯 ניתוח התאמה"):
+            if why_fits:
+                st.success(f"**למה זה מתאים**: {why_fits}")
+            if why_not:
+                st.warning(f"**למה זה אולי לא מתאים**: {why_not}")
+    
+    best_for = fit_analysis.get("best_for", [])
+    if best_for:
+        st.info(f"**הכי טוב ל**: {', '.join(best_for)}")
+    
+    not_ideal = fit_analysis.get("not_ideal_for", [])
+    if not_ideal:
+        st.warning(f"**לא אידיאלי ל**: {', '.join(not_ideal)}")
+    
+    # Sources
+    sources = car.get("sources", [])
+    if sources:
+        with st.expander("📚 מקורות"):
+            for src in sources:
+                if isinstance(src, dict):
+                    title = src.get("title", "")
+                    url = src.get("url", "")
+                    supports = src.get("supports", "")
+                    src_type = src.get("source_type", "")
+                    
+                    src_str = f"**{title}**" if title else "מקור"
+                    if url:
+                        src_str = f"[{src_str}]({url})"
+                    if supports:
+                        src_str += f" (תומך ב: {supports})"
+                    if src_type:
+                        src_str += f" [{src_type}]"
+                    st.markdown(f"• {src_str}")
+                else:
+                    st.write(f"• {src}")
+    else:
+        st.warning("⚠️ לא נמצאו מקורות")
+    
+    st.markdown("---")
