@@ -7,6 +7,9 @@ Streamlit test app for car recommendations using Kimi K2.6 with web search.
 import streamlit as st
 import json
 import os
+import sys
+import openai
+import httpx
 
 # --------------------------------------------------
 # Page config
@@ -56,7 +59,7 @@ def get_kimi_client():
         from openai import OpenAI
         client = OpenAI(
             api_key=api_key,
-            base_url="https://api.moonshot.ai/v1",
+            base_url=KIMI_BASE_URL,
         )
         return client, None
     except TypeError as exc:
@@ -223,9 +226,6 @@ st.markdown(
 )
 
 with st.sidebar.expander("Debug"):
-    import sys
-    import openai
-    import httpx
     st.write("Python:", sys.version)
     st.write("openai:", getattr(openai, "__version__", "unknown"))
     st.write("httpx:", getattr(httpx, "__version__", "unknown"))
