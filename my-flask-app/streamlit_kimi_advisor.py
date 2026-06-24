@@ -36,6 +36,7 @@ st.markdown(
 KIMI_MODEL = "kimi-k2.6"
 KIMI_BASE_URL = "https://api.moonshot.ai/v1"
 MAX_TOKENS = 12000
+MAX_TOOL_CALL_ITERATIONS = 10
 KIMI_TOOLS = [{"type": "builtin_function", "function": {"name": "$web_search"}}]
 
 
@@ -129,7 +130,7 @@ def call_kimi(client: OpenAI, profile: dict) -> dict:
         {"role": "user", "content": build_user_message(profile)},
     ]
 
-    for _ in range(10):  # max iterations to prevent infinite loops
+    for _ in range(MAX_TOOL_CALL_ITERATIONS):  # prevent infinite loops
         response = client.chat.completions.create(
             model=KIMI_MODEL,
             messages=messages,
