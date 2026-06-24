@@ -204,11 +204,8 @@ def call_kimi(client, profile: dict) -> dict:
             model=KIMI_MODEL,
             messages=messages,
             tools=KIMI_TOOLS,
-            temperature=1.0,
             max_tokens=MAX_TOKENS,
-            extra_body={
-                "thinking": {"type": "disabled"}
-            },
+            extra_body={"thinking": {"type": "disabled"}},
         )
 
         choice = completion.choices[0]
@@ -218,7 +215,7 @@ def call_kimi(client, profile: dict) -> dict:
         if finish_reason == "tool_calls":
             messages.append(assistant_message)
 
-            tool_calls = assistant_message.get("tool_calls") or []
+            tool_calls = assistant_message.get("tool_calls", [])
 
             for tool_call in tool_calls:
                 tool_call_id = get_tool_call_id(tool_call)
