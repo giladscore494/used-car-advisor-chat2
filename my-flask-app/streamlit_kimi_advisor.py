@@ -147,6 +147,47 @@ def build_user_message(profile: dict) -> str:
 
 
 # --------------------------------------------------
+# Helper functions for handling SDK objects and dicts
+# --------------------------------------------------
+def obj_get(obj, key, default=None):
+    """Safely get attribute from object or dict."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def normalize_message(message):
+    """Convert message to dict format."""
+    if isinstance(message, dict):
+        return message
+    if hasattr(message, "model_dump"):
+        return message.model_dump(exclude_none=True)
+    return dict(message)
+
+
+def get_tool_call_id(tool_call):
+    """Extract tool call id from object or dict."""
+    return obj_get(tool_call, "id")
+
+
+def get_tool_call_function(tool_call):
+    """Extract function from tool call object or dict."""
+    return obj_get(tool_call, "function", {})
+
+
+def get_tool_call_name(tool_call):
+    """Extract function name from tool call."""
+    function = get_tool_call_function(tool_call)
+    return obj_get(function, "name")
+
+
+def get_tool_call_arguments(tool_call):
+    """Extract function arguments from tool call."""
+    function = get_tool_call_function(tool_call)
+    return obj_get(function, "arguments", "{}")
+
+
+# --------------------------------------------------
 # Kimi tool-call loop
 # --------------------------------------------------
 def call_kimi(client, profile: dict) -> dict:
@@ -156,32 +197,54 @@ def call_kimi(client, profile: dict) -> dict:
         {"role": "user", "content": build_user_message(profile)},
     ]
 
+    finish_reason = None
+
     for _ in range(MAX_TOOL_CALL_ITERATIONS):  # prevent infinite loops
-        response = client.chat.completions.create(
+        completion = client.chat.completions.create(
             model=KIMI_MODEL,
             messages=messages,
             tools=KIMI_TOOLS,
+            temperature=1.0,
             max_tokens=MAX_TOKENS,
-            extra_body={"thinking": {"type": "disabled"}},
+            extra_body={
+                "thinking": {"type": "disabled"}
+            },
         )
-        choice = response.choices[0]
 
-        if choice.finish_reason == "tool_calls":
-            # Append assistant message with tool calls
-            messages.append(choice.message.model_dump())
-            # Append tool results
-            for tc in choice.message.tool_calls:
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "name": "$web_search",
-                        "content": tc.function.arguments,
-                    }
-                )
-        else:
-            # finish_reason == "stop" or other terminal state
-            return {"raw": choice.message.content, "usage": response.usage}
+        choice = completion.choices[0]
+        finish_reason = choice.finish_reason
+        assistant_message = normalize_message(choice.message)
+
+        if finish_reason == "tool_calls":
+            messages.append(assistant_message)
+
+            tool_calls = assistant_message.get("tool_calls") or []
+
+            for tool_call in tool_calls:
+                tool_call_id = get_tool_call_id(tool_call)
+                tool_name = get_tool_call_name(tool_call)
+                tool_args = get_tool_call_arguments(tool_call)
+
+                if not tool_call_id:
+                    raise RuntimeError("Kimi tool call missing id")
+
+                if not tool_name:
+                    raise RuntimeError("Kimi tool call missing function.name")
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "name": tool_name,
+                    "content": tool_args or "{}",
+                })
+
+            continue
+
+        if finish_reason == "stop":
+            final_content = assistant_message.get("content", "")
+            return {"raw": final_content, "usage": completion.usage}
+
+        raise RuntimeError(f"Unexpected Kimi finish_reason: {finish_reason}")
 
     return {"raw": "Error: tool-call loop exceeded max iterations.", "usage": None}
 
@@ -371,8 +434,14 @@ if submit_clicked and not errors:
                 st.error("❌ לא הצלחתי לפרסר את תשובת Kimi כ-JSON.")
                 with st.expander("תשובה גולמית"):
                     st.code(result["raw"])
+        except RuntimeError as exc:
+            st.error(f"❌ שגיאה ב-Kimi: {exc}")
+            st.session_state.kimi_result = None
+            st.session_state.kimi_raw = None
         except Exception as exc:
-            st.error(f"❌ שגיאה בקריאה ל-Kimi: {exc}")
+            st.error(f"❌ שגיאה בלתי צפויה בקריאה ל-Kimi: {type(exc).__name__}: {exc}")
+            st.session_state.kimi_result = None
+            st.session_state.kimi_raw = None
 
 # --------------------------------------------------
 # Display results
